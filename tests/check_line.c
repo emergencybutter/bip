@@ -107,7 +107,7 @@ Suite *money_suite(void)
 
 	s = suite_create("bip");
 
-	tc_core = tcase_create("core");
+	tc_core = tcase_create("line");
 
 	tcase_add_test(tc_core, test_line_init);
 	tcase_add_test(tc_core, test_line_parse);

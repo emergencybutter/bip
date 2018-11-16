@@ -70,37 +70,42 @@ typedef struct array {
 	void **elemv;
 } array_t;
 
-#define MOVE_STRING(dest, src) do {\
-	if (dest)\
-		free(dest);\
-	(dest) = (src);\
-	(src) = NULL;\
-} while(0)
+#define MOVE_STRING(dest, src)                                                 \
+	do {                                                                   \
+		if (dest)                                                      \
+			free(dest);                                            \
+		(dest) = (src);                                                \
+		(src) = NULL;                                                  \
+	} while (0)
 
-#define FREE(a) free(a); (a) = NULL;
+#define FREE(a)                                                                \
+	free(a);                                                               \
+	(a) = NULL;
 
-#define MAYFREE(a) do { \
-		if (a) { \
-			free(a); \
-			(a) = NULL; \
-		} \
-	} while(0);
+#define MAYFREE(a)                                                             \
+	do {                                                                   \
+		if (a) {                                                       \
+			free(a);                                               \
+			(a) = NULL;                                            \
+		}                                                              \
+	} while (0);
 
-#define assert(condition) \
-	do { \
-		if (!(condition)) \
-			fatal("Failed assertion in " __FILE__ "(%d): " \
-				#condition, __LINE__); \
-	} while(0)
+#define assert(condition)                                                      \
+	do {                                                                   \
+		if (!(condition))                                              \
+			fatal("Failed assertion in " __FILE__                  \
+			      "(%d): " #condition,                             \
+			      __LINE__);                                       \
+	} while (0)
 
-#define assert_msg(condition, msg) \
-	do { \
-		if (!(condition)) \
-			fatal("%s in " __FILE__ "(%d): " \
-				#condition, (msg), __LINE__); \
-	} while(0)
+#define assert_msg(condition, msg)                                             \
+	do {                                                                   \
+		if (!(condition))                                              \
+			fatal("%s in " __FILE__ "(%d): " #condition, (msg),    \
+			      __LINE__);                                       \
+	} while (0)
 
-void list_init(list_t *list, int (*cmp)(const void*, const void*));
+void list_init(list_t *list, int (*cmp)(const void *, const void *));
 int list_ptr_cmp(const void *a, const void *b);
 list_t *list_new(int (*cmp)(const void *, const void *));
 void *list_remove(list_t *list, const void *ptr);
@@ -175,9 +180,10 @@ void *bip_malloc(size_t size);
 void *bip_calloc(size_t nmemb, size_t size);
 void *bip_realloc(void *ptr, size_t size);
 char *bip_strdup(const char *str);
-#define array_each(a, idx, ptr) for ((idx) = 0; \
-		(idx) < (a)->elemc && (((ptr) = array_get((a), (idx))) || 1); \
-		(idx)++)
+#define array_each(a, idx, ptr)                                                \
+	for ((idx) = 0;                                                        \
+	     (idx) < (a)->elemc && (((ptr) = array_get((a), (idx))) || 1);     \
+	     (idx)++)
 
 void array_init(array_t *a);
 array_t *array_new(void);

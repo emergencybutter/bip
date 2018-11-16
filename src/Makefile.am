@@ -10,7 +10,8 @@ libbip_a_SOURCES = conf.y lex.l \
 	md5.c md5.h \
 	path_util.c path_util.h \
 	tuple.h \
-	util.c util.h
+	util.c util.h \
+	poller.c poller.h
 
 bin_PROGRAMS = bip bipmkpw
 
@@ -21,4 +22,4 @@ bipmkpw_SOURCES = bipmkpw.c md5.c util.c
 AM_YFLAGS= -d
 BUILT_SOURCES = conf.c conf.h lex.c
 
-AM_CFLAGS=-Wall -Wextra -Werror
+#AM_CFLAGS=-Wall -Wextra -Werror
