@@ -13,11 +13,12 @@
 
 #include "config.h"
 #include <sys/time.h>
+#include <sys/errno.h>
 #include <time.h>
 #include "connection.h"
 #include "path_util.h"
+#include "poller.h"
 
-extern int errno;
 #ifdef HAVE_LIBSSL
 static int ssl_initialized = 0;
 static SSL_CTX *sslctx = NULL;
@@ -28,7 +29,6 @@ extern char *conf_ssl_certfile;
 extern char *conf_biphome;
 extern char *conf_client_ciphers;
 extern char *conf_client_dh_file;
-static int SSLize(connection_t *cn, int *nc);
 static SSL_CTX *SSL_init_context(char *ciphers);
 /* SSH like trust management */
 int link_add_untrusted(void *ls, X509 *cert);
@@ -38,6 +38,24 @@ static int cn_want_write(connection_t *cn);
 static int connection_timedout(connection_t *cn);
 static int socket_set_nonblock(int s);
 static void connection_connected(connection_t *c);
+static void real_write_all(connection_t *cn);
+static void real_read_all(connection_t *cn);
+static int read_socket_SSL(connection_t *cn);
+static int read_socket(connection_t *cn);
+static void data_find_lines(connection_t *cn);
+static void maybe_trigger_read_event(connection_t *cn);
+static void maybe_trigger_write_event(connection_t *cn);
+static int cn_is_in_error(connection_t *cn);
+static void connection_save_endpoints(connection_t *c);
+static int connection_want_write(connection_t *cn);
+
+poller_t* global_poller() {
+	static poller_t *poller = NULL;
+	if (poller == NULL) {
+		poller = poller_create();
+	}
+	return poller;
+}
 
 struct connecting_data
 {
@@ -57,13 +75,15 @@ static void connecting_data_free(struct connecting_data *t)
 
 void connection_close(connection_t *cn)
 {
-	mylog(LOG_DEBUG, "Connection close asked. FD:%d ",
+	mylog(LOG_DEBUG, "Connection close. FD:%d ",
 			(long)cn->handle);
 	if (cn->connected != CONN_DISCONN && cn->connected != CONN_ERROR) {
 		cn->connected = CONN_DISCONN;
+		poller_unregister(global_poller(), cn->handle);
 		if (close(cn->handle) == -1)
 			mylog(LOG_WARN, "Error on socket close: %s",
 					strerror(errno));
+		cn->handle = -1;
 	}
 }
 
@@ -112,6 +132,223 @@ void connection_free(connection_t *cn)
 	free(cn);
 }
 
+static void connection_client_ssl_connect(connection_t *cn)
+{
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+	int err;
+	if (cn->ssl_client) {
+		err = SSL_connect(cn->ssl_h);
+	} else {
+		err = SSL_accept(cn->ssl_h);
+	}
+
+	switch (SSL_get_error(cn->ssl_h, err)) {
+	case SSL_ERROR_WANT_READ:
+		descriptor_set_events(descriptor, POLLER_IN);
+		descriptor_unset_events(descriptor, POLLER_OUT);
+		break;
+	case SSL_ERROR_WANT_WRITE:
+		descriptor_set_events(descriptor, POLLER_OUT);
+		descriptor_unset_events(descriptor, POLLER_IN);
+		break;
+	case SSL_ERROR_ZERO_RETURN:
+	case SSL_ERROR_SSL:
+	case SSL_ERROR_SYSCALL:
+		mylog(LOG_ERROR, "Error in SSL handshake.");
+		connection_close(cn);
+		cn->connected = CONN_ERROR;
+		break;
+	case SSL_ERROR_NONE: {
+		const SSL_CIPHER *cipher;
+		char buf[128];
+		int len;
+
+		cipher = SSL_get_current_cipher(cn->ssl_h);
+		SSL_CIPHER_description(cipher, buf, 128);
+		len = strlen(buf);
+		if (len > 0)
+			buf[len - 1] = '\0';
+		mylog(LOG_DEBUG, "Negociated ciphers: %s", buf);
+
+		switch (cn->ssl_check_mode) {
+		case SSL_CHECK_NONE:
+			cn->connected = CONN_OK;
+			descriptor_set_events(descriptor, POLLER_IN);
+			descriptor_unset_events(descriptor, POLLER_OUT);
+
+			return;
+		case SSL_CHECK_BASIC:
+			if ((err = SSL_get_verify_result(cn->ssl_h))
+			    != X509_V_OK) {
+				mylog(LOG_ERROR,
+				      "Certificate check failed: %s (%d)!",
+				      X509_verify_cert_error_string(err), err);
+				cn->connected = CONN_UNTRUSTED;
+				descriptor_set_events(descriptor, POLLER_IN);
+				descriptor_unset_events(descriptor, POLLER_OUT);
+
+				return;
+			}
+			break;
+		case SSL_CHECK_CA:
+			if ((err = SSL_get_verify_result(cn->ssl_h))
+			    != X509_V_OK) {
+				mylog(LOG_ERROR,
+				      "Certificate check failed: %s (%d)!",
+				      X509_verify_cert_error_string(err), err);
+				cn->connected = CONN_UNTRUSTED;
+				descriptor_set_events(descriptor, POLLER_IN);
+				descriptor_unset_events(descriptor, POLLER_OUT);
+
+				return;
+			}
+			break;
+		default:
+			fatal("Unknown ssl_check_mode");
+		}
+	}
+	default:
+		fatal("Unknown SSL Error");
+	}
+}
+
+static void listener_on_in(void *data)
+{
+	listener_t *listener = data;
+	mylog(LOG_DEBUG, "listener_on_in: %d", listener->handle);
+	connection_t *connection = accept_new(listener);
+	list_add_last(&listener->accepted_connections, connection);
+	connection->user_data = listener->user_data;
+}
+
+static void listener_on_out(void *data)
+{
+	listener_t *listener = data;
+	mylog(LOG_DEBUG, "listener_on_out: %d", listener->handle);
+}
+
+static void listener_on_hup(void *data)
+{
+	listener_t *listener = data;
+	mylog(LOG_DEBUGTOOMUCH, "on_hup: %d", listener->handle);
+}
+
+static void connection_client_on_in(void *data)
+{
+	connection_t *cn = data;
+	mylog(LOG_DEBUG, "connection_client_on_in: %d", cn->handle);
+	switch (cn->connected) {
+	case CONN_SSL_CONNECT:
+		connection_client_ssl_connect(cn);
+		break;
+	case CONN_SSL_NEED_RETRY_WRITE:
+		assert(cn->ssl);
+		assert(cn->partial != NULL);
+		real_write_all(cn);
+		break;
+	case CONN_SSL_NEED_RETRY_READ:
+		assert(cn->ssl);
+		real_read_all(cn);
+		break;
+	case CONN_OK:
+		real_read_all(cn);
+		break;
+	default:
+		fatal("Unknown connect state: %d", cn->connected);
+	}
+}
+
+void real_read_all(connection_t *cn)
+{
+	int ret;
+#ifdef HAVE_LIBSSL
+	if (cn->ssl)
+		ret = read_socket_SSL(cn);
+	else
+#endif
+		ret = read_socket(cn);
+
+	if (!cn->incoming_lines)
+		cn->incoming_lines = list_new(NULL);
+	data_find_lines(cn);
+	maybe_trigger_read_event(cn);
+}
+
+static void connection_client_on_out(void *data)
+{
+	connection_t *cn = data;
+	mylog(LOG_DEBUG, "connection_client_on_out: %d", cn->handle);
+
+	if (cn_is_in_error(cn)) {
+		mylog(LOG_ERROR, "Error on fd %d (state %d)", cn->handle,
+		      cn->connected);
+		connection_close(cn);
+		return;
+	}
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+	switch (cn->connected) {
+	case CONN_INPROGRESS: {
+		int optval = -1;
+		int optlen = sizeof(optval);
+		int err = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval,
+				     &optlen);
+		mylog(LOG_DEBUG, "fd:%d Connection finished: %d !", cn->handle,
+		      optval);
+		if (optval != 0) {
+			connection_close(cn);
+			return;
+		}
+		if (cn->connecting_data) {
+			connecting_data_free(cn->connecting_data);
+			cn->connecting_data = NULL;
+		}
+		connection_save_endpoints(cn);
+		if (!cn->ssl) {
+			cn->connected = CONN_OK;
+			descriptor_unset_events(descriptor, POLLER_OUT);
+			return;
+		}
+		cn->connected = CONN_SSL_CONNECT;
+		if (cn->ssl_client == 1) {
+			if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
+				mylog(LOG_ERROR,
+				      "unable to associate FD to SSL structure");
+				cn->connected = CONN_ERROR;
+				return;
+			}
+		}
+		// Leave the POLLER_OUT event listener.
+		break;
+	}
+	case CONN_SSL_CONNECT:
+		connection_client_ssl_connect(cn);
+		break;
+	case CONN_OK:
+		real_write_all(cn);
+		break;
+	case CONN_SSL_NEED_RETRY_WRITE:
+		assert(cn->ssl);
+		assert(cn->partial != NULL);
+		real_write_all(cn);
+		break;
+	case CONN_SSL_NEED_RETRY_READ:
+		assert(cn->ssl);
+		real_read_all(cn);
+		break;
+	default:
+		fatal("Unknown client connect state: %d", cn->connected);
+	}
+}
+
+static void connection_client_on_hup(void *data)
+{
+	connection_t *cn = data;
+	mylog(LOG_ERROR, "Disconnection. %d\n", cn->handle);
+	connection_close(data);
+}
+
 static void connect_trynext(connection_t *cn)
 {
 	struct addrinfo *cur;
@@ -123,26 +360,19 @@ static void connect_trynext(connection_t *cn)
 
 	cur = cn->connecting_data->cur;
 
+	mylog(LOG_DEBUG, "trynext: %d", cn->handle);
+
 	for (cur = cn->connecting_data->cur ; cur ; cur = cur->ai_next) {
 		if ((cn->handle = socket(cur->ai_family, cur->ai_socktype,
 						cur->ai_protocol)) < 0) {
 			mylog(LOG_WARN, "socket() : %s", strerror(errno));
 			continue;
 		}
-
-		if (cn->handle >= FD_SETSIZE) {
-			mylog(LOG_WARN, "too many fd used, close socket %d",
-					cn->handle);
-
-			if (close(cn->handle) == -1)
-				mylog(LOG_WARN, "Error on socket close: %s",
-						strerror(errno));
-
-			cn->handle = -1;
-			break;
-		}
-
-		socket_set_nonblock(cn->handle);
+		descriptor_t* descriptor = poller_register(global_poller(), cn->handle);
+		descriptor->on_in = connection_client_on_in;
+		descriptor->on_out = connection_client_on_out;
+		descriptor->on_hup = connection_client_on_hup;
+		descriptor->data = cn;
 
 		if (cn->connecting_data->src) {
 			/* local bind */
@@ -152,34 +382,28 @@ static void connect_trynext(connection_t *cn)
 			if (err == -1)
 				mylog(LOG_WARN, "bind() before connect: %s",
 						strerror(errno));
+			connection_close(cn);
 		}
 
 		err = connect(cn->handle, cur->ai_addr, cur->ai_addrlen);
-		if (err == -1 && errno == EINPROGRESS) {
-			/* ok for now, see later */
-			/* next time try the next in the list */
-			cn->connecting_data->cur = cur->ai_next;
-			cn->connect_time = time(NULL);
-			cn->connected = CONN_INPROGRESS;
-			return;
+		if (err == -1 && errno != EINPROGRESS) {
+			/* connect() failed */
+			char ip[256];
+			mylog(LOG_WARN, "connect(%s) : %s",
+				inet_ntop(cur->ai_family, cur->ai_addr, ip, 256),
+				strerror(errno));
+			connection_close(cn);
 		}
 
-		if (!err) {
-			/* connect() successful */
-			connecting_data_free(cn->connecting_data);
-			cn->connecting_data = NULL;
-			cn->connected = cn->ssl ? CONN_NEED_SSLIZE : CONN_OK;
-			connection_connected(cn);
-			return;
-		}
-
-		/* connect() failed */
-		char ip[256];
-		mylog(LOG_WARN, "connect(%s) : %s",
-			inet_ntop(cur->ai_family, cur->ai_addr, ip, 256),
-			strerror(errno));
-		close(cn->handle);
-		cn->handle = -1;
+		// Regardless of if we got EINPROGRESS or SUCCESS, we simply
+		// wait for 'POLLER_OUT' to move the state machine.
+		/* next time try the next in the list */
+		cn->connecting_data->cur = cur->ai_next;
+		cn->connect_time = time(NULL);
+		cn->connected = CONN_INPROGRESS;
+		descriptor_set_events(descriptor, POLLER_OUT);
+		mylog(LOG_DEBUG, "POLLER_OUT: %d", cn->handle);
+		return;
 	}
 
 	cn->connected = CONN_ERROR;
@@ -208,9 +432,9 @@ static int _write_socket_SSL(connection_t *cn, char* message)
 {
 	int count, size;
 
-	size = sizeof(char)*strlen(message);
+	size = strlen(message);
 
-	if (!cn->client && cn->cert == NULL) {
+	if (cn->ssl_client == 1 && cn->cert == NULL) {
 		cn->cert = mySSL_get_cert(cn->ssl_h);
 		if (cn->cert == NULL) {
 			mylog(LOG_ERROR, "No certificate in SSL write_socket");
@@ -221,16 +445,34 @@ static int _write_socket_SSL(connection_t *cn, char* message)
 	ERR_print_errors(errbio);
 	if (count <= 0) {
 		int err = SSL_get_error(cn->ssl_h, count);
-		if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE
-				|| err == SSL_ERROR_WANT_CONNECT
-				|| err == SSL_ERROR_WANT_ACCEPT)
+		switch (err) {
+		case SSL_ERROR_WANT_READ:
+			descriptor_set_events(
+				poller_get_descriptor(global_poller(),
+						      cn->handle),
+				POLLER_IN);
+			descriptor_unset_events(
+				poller_get_descriptor(global_poller(),
+						      cn->handle),
+				POLLER_OUT);
+			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
 			return WRITE_KEEP;
-		if (cn_is_connected(cn)) {
-			mylog(LOG_ERROR, "fd %d: Connection error",
-					cn->handle);
-			cn->connected = CONN_ERROR;
+		case SSL_ERROR_WANT_WRITE:
+			descriptor_unset_events(
+				poller_get_descriptor(global_poller(),
+						      cn->handle),
+				POLLER_IN);
+			descriptor_set_events(
+				poller_get_descriptor(global_poller(),
+						      cn->handle),
+				POLLER_OUT);
+			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
+			return WRITE_KEEP;
+		default:
+			connection_close(cn);
+			return WRITE_ERROR;
 		}
-		return WRITE_ERROR;
+		return WRITE_KEEP;
 	}
 	if (count != size) {
 		/* abnormal : openssl keeps writing until message is not fully
@@ -240,6 +482,7 @@ static int _write_socket_SSL(connection_t *cn, char* message)
 	}
 
 	mylog(LOG_DEBUGVERB, "%d/%d bytes sent", count, size);
+	descriptor_unset_events(poller_get_descriptor(global_poller(), cn->handle), POLLER_OUT);
 	return WRITE_OK;
 }
 
@@ -296,17 +539,19 @@ static int _write_socket(connection_t *cn, char *message)
 	ssize_t count;
 
 	size = strlen(message);
-	if (size == 0)
+	if (size == 0) {
 		return WRITE_OK;
+	}
 	/* loop if we wrote some data but not everything, or if error is
 	 * EINTR */
 	do {
 		count = write(cn->handle, ((const char *)message) + tcount,
-					size - tcount);
+			      size - tcount);
 		if (count > 0) {
 			tcount += count;
-			if (tcount == size)
+			if (tcount == size) {
 				return WRITE_OK;
+			}
 		}
 	} while (count > 0 || (count < 0 && errno == EINTR));
 
@@ -328,7 +573,6 @@ static int _write_socket(connection_t *cn, char *message)
 		if (errno != EPIPE)
 			mylog(LOG_INFO, "Broken socket: %s.", strerror(errno));
 		connection_close(cn);
-		cn->connected = CONN_ERROR;
 	}
 	mylog(LOG_DEBUGVERB, "write: %d, %s", cn->handle, strerror(errno));
 	return WRITE_ERROR;
@@ -345,14 +589,21 @@ static int write_socket(connection_t *cn, char *line)
 
 }
 
-/* returns 1 if connection must be notified */
-static int real_write_all(connection_t *cn)
+static void real_write_all(connection_t *cn)
 {
 	int ret;
 	char *line;
 
 	if (cn == NULL)
 		fatal("real_write_all: wrong arguments");
+
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+
+	if (cn->partial == NULL && list_is_empty(cn->outgoing)) {
+		maybe_trigger_write_event(cn);
+		return;
+	}
 
 	if (cn->partial) {
 		line = cn->partial;
@@ -363,17 +614,17 @@ static int real_write_all(connection_t *cn)
 
 	do {
 		ret = write_socket(cn, line);
-
 		switch (ret) {
 		case WRITE_ERROR:
 			/* we might as well free(line) here */
 			list_add_first(cn->outgoing, line);
-			return 1;
+			connection_close(cn);
+			return;
 		case WRITE_KEEP:
 			/* interrupted or not ready */
 			assert(cn->partial == NULL);
 			cn->partial = line;
-			return 0;
+			break;
 		case WRITE_OK:
 			free(line);
 			break;
@@ -381,55 +632,60 @@ static int real_write_all(connection_t *cn)
 			fatal("internal error 6");
 			break;
 		}
-
-		if (cn->anti_flood)
-			/* one line at a time */
-			break;
 	} while ((line = list_remove_first(cn->outgoing)));
-	return 0;
+	maybe_trigger_write_event(cn);
+}
+
+static void maybe_trigger_read_event(connection_t *cn)
+{
+	if (cn->connected == CONN_SSL_NEED_RETRY_READ
+	    && cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
+		return;
+	}
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+	descriptor_set_events(descriptor, POLLER_IN);
+}
+
+static void maybe_trigger_write_event(connection_t *cn)
+{
+	if (cn->connected == CONN_SSL_NEED_RETRY_READ
+	    && cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
+		return;
+	}
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+	descriptor_unset_events(descriptor, POLLER_OUT);
+	if (cn->partial == NULL) {
+		return;
+	}
+	if (!connection_want_write(cn)) {
+		return;
+	}
+	descriptor_set_events(descriptor, POLLER_OUT);
 }
 
 /*
- * May only be used when writing to the client or when sending
- * timing-sensitive data to the server (PONG, PING for lagtest, QUIT)
- * because fakelag is not enforced.
+ * skips to the head of the queue.
  */
 void write_line_fast(connection_t *cn, char *line)
 {
 	int r;
 	char *nline = bip_strdup(line);
-
-	if (cn->partial) {
-		list_add_first(cn->outgoing, nline);
-	} else {
-		r = write_socket(cn, nline);
-		switch (r) {
-		case WRITE_KEEP:
-			cn->partial = nline;
-			break;
-		case WRITE_ERROR:
-		case WRITE_OK:
-			free(nline);
-			break;
-		default:
-			fatal("internal error 7");
-			break;
-		}
-	}
+	list_add_first(cn->outgoing, nline);
+	maybe_trigger_write_event(cn);
 }
 
 void write_lines(connection_t *cn, list_t *lines)
 {
 	list_append(cn->outgoing, lines);
-	if (cn_want_write(cn))
-		real_write_all(cn);
+	maybe_trigger_write_event(cn);
 }
 
 void write_line(connection_t *cn, char *line)
 {
 	list_add_last(cn->outgoing, bip_strdup(line));
-	if (cn_want_write(cn))
-		real_write_all(cn);
+	maybe_trigger_write_event(cn);
 }
 
 list_t *read_lines(connection_t *cn, int *error)
@@ -464,50 +720,51 @@ list_t *read_lines(connection_t *cn, int *error)
 }
 
 #ifdef HAVE_LIBSSL
-/* returns 1 if connection must be notified */
+
 static int read_socket_SSL(connection_t *cn)
 {
 	int max, count;
 
 	max = CONN_BUFFER_SIZE - cn->incoming_end;
-	if (!cn->client && cn->cert == NULL) {
+	if (cn->ssl_client && cn->cert == NULL) {
 		cn->cert = mySSL_get_cert(cn->ssl_h);
 		if (cn->cert == NULL) {
 			mylog(LOG_ERROR, "No certificate in SSL read_socket");
-			return -1;
+			return READ_ERROR;
 		}
 	}
 	count = SSL_read(cn->ssl_h, (void *)cn->incoming + cn->incoming_end,
-			sizeof(char) * max);
+			max);
 	ERR_print_errors(errbio);
 	if (count < 0) {
 		int err = SSL_get_error(cn->ssl_h, count);
-		if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE
-				|| err == SSL_ERROR_WANT_CONNECT
-				|| err == SSL_ERROR_WANT_ACCEPT)
-			return 0;
-		if (cn_is_connected(cn)) {
-			mylog(LOG_ERROR, "fd %d: Connection error",
-					cn->handle);
-			cn->connected = CONN_ERROR;
+		if (err == SSL_ERROR_WANT_READ) {
+			cn->connected = CONN_SSL_NEED_RETRY_READ;
+			descriptor_set_events(
+				poller_get_descriptor(global_poller(), cn->handle),
+				POLLER_IN);
+			return READ_OK;
 		}
-		return 1;
+		if (err == SSL_ERROR_WANT_WRITE) {
+			cn->connected = CONN_SSL_NEED_RETRY_READ;
+			descriptor_set_events(
+				poller_get_descriptor(global_poller(), cn->handle),
+				POLLER_OUT);
+			return READ_OK;
+		}
+		mylog(LOG_ERROR, "fd %d: Connection error",
+					cn->handle);
+		connection_close(cn);
+		return READ_ERROR;
 	} else if (count == 0) {
-/*		int err = SSL_get_error(cn->ssl_h,count);
-		if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE
-				|| err == SSL_ERROR_WANT_CONNECT
-				|| err == SSL_ERROR_WANT_ACCEPT)
-			return 0;*/
-		if (cn_is_connected(cn)) {
 			mylog(LOG_ERROR, "fd %d: Connection lost",
 					cn->handle);
 			connection_close(cn);
-		}
-		return 1;
+		return READ_ERROR;
 	}
 
 	cn->incoming_end += count;
-	return 0;
+	return READ_OK;
 }
 #endif
 
@@ -515,32 +772,30 @@ static int read_socket_SSL(connection_t *cn)
 static int read_socket(connection_t *cn)
 {
 	int max, count;
-
-	if (cn == NULL)
-		return 0;
+	assert(cn != NULL);
 	max = CONN_BUFFER_SIZE - cn->incoming_end;
-	count = read(cn->handle, cn->incoming+cn->incoming_end,
-			sizeof(char)*max);
+	count = read(cn->handle, cn->incoming + cn->incoming_end,
+			max);
 	if (count < 0) {
-		if (errno == EAGAIN || errno == EINTR || errno == EINPROGRESS)
-			return 0;
-		if (cn_is_connected(cn)) {
-			mylog(LOG_ERROR, "read(fd=%d): Connection error: %s",
-					cn->handle, strerror(errno));
-			cn->connected = CONN_ERROR;
+		if (errno == EAGAIN || errno == EINTR || errno == EINPROGRESS) {
+			descriptor_set_events(
+				poller_get_descriptor(global_poller(), cn->handle),
+				POLLER_IN);
+			return READ_OK;
 		}
-		return 1;
+		mylog(LOG_ERROR, "read(fd=%d): Connection error: %s",
+				cn->handle, strerror(errno));
+		connection_close(cn);
+		return READ_ERROR;
 	} else if (count == 0) {
-		if (cn_is_connected(cn)) {
-			mylog(LOG_ERROR, "read(fd=%d): Connection lost: %s",
+		mylog(LOG_ERROR, "read(fd=%d): Connection lost: %s",
 					cn->handle, strerror(errno));
-			connection_close(cn);
-		}
-		return 1;
+		connection_close(cn);
+		return READ_ERROR;
 	}
 
 	cn->incoming_end += count;
-	return 0;
+	return READ_OK;
 }
 
 static void data_find_lines(connection_t *cn)
@@ -597,7 +852,7 @@ int cn_is_new(connection_t *cn)
 	}
 }
 
-int cn_is_in_error(connection_t *cn)
+static int cn_is_in_error(connection_t *cn)
 {
 	switch (cn->connected) {
 	case CONN_TIMEOUT:
@@ -624,70 +879,7 @@ int cn_is_connected(connection_t *cn)
 	return (cn->connected == CONN_OK ? 1 : 0);
 }
 
-static int check_event_except(fd_set *fds, connection_t *cn)
-{
-	if (!cn_is_connected(cn))
-		return 0;
-
-	if (cn_is_in_error(cn)) {
-		mylog(LOG_ERROR, "Error on fd %d (state %d)",
-				cn->handle, cn->connected);
-		return 1;
-	}
-
-	if (!FD_ISSET(cn->handle, fds))
-		return 0;
-
-	mylog(LOG_DEBUGTOOMUCH,"fd %d is in exceptions list", cn->handle);
-	cn->connected = CONN_EXCEPT;
-	return 1;
-}
-
-static int check_event_read(fd_set *fds, connection_t *cn)
-{
-	int ret;
-
-	if (cn_is_in_error(cn)) {
-		mylog(LOG_ERROR, "Error on fd %d (state %d)",
-				cn->handle, cn->connected);
-		return 1;
-	}
-
-	if (!FD_ISSET(cn->handle, fds))
-		return 0;
-
-	mylog(LOG_DEBUGTOOMUCH, "Read positive on fd %d (state %d)", cn->handle,
-			cn->connected);
-
-	/* notify caller to make it check for a new client */
-	if (cn->listening)
-		return 1;
-
-#ifdef HAVE_LIBSSL
-	if (cn->ssl)
-		ret = read_socket_SSL(cn);
-	else
-#endif
-		ret = read_socket(cn);
-
-	if (ret) {
-		mylog(LOG_ERROR, "Error while reading on fd %d",
-				cn->handle);
-		return 1;
-	}
-
-	if (!cn->incoming_lines)
-		cn->incoming_lines = list_new(NULL);
-	data_find_lines(cn);
-	if (list_is_empty(cn->incoming_lines))
-		return 0;
-
-	mylog(LOG_DEBUGTOOMUCH, "newlines on fd %d (state %d)", cn->handle,
-			cn->connected);
-	return 1;
-}
-
-static void connection_connected(connection_t *c)
+static void connection_save_endpoints(connection_t *c)
 {
 	if (c->localip)
 		free(c->localip);
@@ -699,88 +891,6 @@ static void connection_connected(connection_t *c)
 	c->remoteport = connection_remoteport(c);
 }
 
-static int check_event_write(fd_set *fds, connection_t *cn, int *nc)
-{
-	if (cn_is_in_error(cn)) {
-		mylog(LOG_ERROR, "Error on fd %d (state %d)",
-				cn->handle, cn->connected);
-		return 1;
-	}
-
-	if (!FD_ISSET(cn->handle, fds)) {
-		if (cn_is_connected(cn))
-			return 0;
-
-		mylog(LOG_DEBUG, "New socket still not connected (%d)",
-				cn->handle);
-		/* check timeout (handles connect_trynext) */
-		return connection_timedout(cn);
-	}
-
-	mylog(LOG_DEBUGTOOMUCH, "Write positive on fd %d (state %d)",
-			cn->handle, cn->connected);
-
-	if (cn_is_new(cn)) {
-		int err, err2;
-		socklen_t errSize = sizeof(err);
-
-		err2 = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR,
-				(void *)&err, &errSize);
-
-		if (err2 < 0) {
-			mylog(LOG_ERROR, "fd:%d getsockopt error: %s",
-					cn->handle, strerror(errno));
-			if (cn->connecting_data) {
-				close(cn->handle);
-				cn->handle = -1;
-				connect_trynext(cn);
-			}
-			return (cn_is_new(cn) || cn->connected ==
-					CONN_NEED_SSLIZE) ? 0 : 1;
-
-		} else if (err == EINPROGRESS || err == EALREADY) {
-			mylog(LOG_DEBUG, "fd:%d Connection in progress...",
-					cn->handle);
-			return connection_timedout(cn);
-		} else if (err == EISCONN || err == 0) {
-#ifdef HAVE_LIBSSL
-			if (cn->ssl) {
-				cn->connected = CONN_NEED_SSLIZE;
-				return 0;
-			}
-#endif
-			cn->connected = CONN_OK;
-			connection_connected(cn);
-			*nc = 1;
-			mylog(LOG_DEBUG, "fd:%d Connection established !",
-					cn->handle);
-			return 1;
-		} else {
-			mylog(LOG_WARN, "fd:%d Socket error: %s", cn->handle,
-					strerror(err));
-			if (cn->connecting_data) {
-				close(cn->handle);
-				cn->handle = -1;
-				connect_trynext(cn);
-			}
-			return (cn_is_new(cn) || cn->connected ==
-					CONN_NEED_SSLIZE) ? 0 : 1;
-		}
-	}
-
-#ifdef HAVE_LIBSSL
-	if (cn->connected == CONN_NEED_SSLIZE) {
-		if (SSLize(cn, nc))
-			return connection_timedout(cn);
-		return 0;
-	}
-#endif
-
-	if (cn_is_connected(cn) && !list_is_empty(cn->outgoing))
-		real_write_all(cn);
-
-	return 0;
-}
 
 /* starts empty */
 /* capacity: 4 token */
@@ -788,7 +898,7 @@ static int check_event_write(fd_set *fds, connection_t *cn, int *nc)
 /* token generation interval: 1200ms */
 #define TOKEN_INTERVAL 1200
 
-static int cn_want_write(connection_t *cn)
+static int connection_want_write(connection_t *cn)
 {
 	if (cn->anti_flood) {
 		struct timespec tv;
@@ -831,143 +941,30 @@ static int cn_want_write(connection_t *cn)
 	return !list_is_empty(cn->outgoing);
 }
 
+void increment_pointee(void* data) {
+	int* p = data;
+	(*p)++;
+}
 
-list_t *wait_event(list_t *cn_list, int *msec, int *nc)
+void wait_event(list_t *listeners_list, list_t *cn_list, int *msec)
 {
-	fd_set fds_read, fds_write, fds_except;
-	int maxfd = -1, err, errtime;
-	list_t *cn_newdata;
-	list_iterator_t it;
-	struct timeval tv;
-	struct timespec btv, etv;
-	*nc = 0;
+	int timedout = 0;
+	global_poller()->timeout = *msec;
+	global_poller()->timed_out = &increment_pointee	;
+	global_poller()->data = &timedout;
 
-	cn_newdata = list_new(list_ptr_cmp);
-	FD_ZERO(&fds_read);
-	FD_ZERO(&fds_write);
-	FD_ZERO(&fds_except);
-	for (list_it_init(cn_list, &it); list_it_item(&it); list_it_next(&it)) {
-		connection_t *cn = list_it_item(&it);
-		if (cn == NULL)
-			fatal("wait_event: wrong argument");
-
-		mylog(LOG_DEBUGTOOMUCH, "I've seen socket %d !", cn->handle);
-		if (cn->connected == CONN_DISCONN) {
-			list_add_first_uniq(cn_newdata, cn);
-			continue;
-		}
-
-		/*
-		 * This shouldn't happen ! just in case...
-		 */
-		if (cn->handle < 0 || cn->handle >= FD_SETSIZE)
-			fatal("wait_event invalid socket %d", cn->handle);
-
-		/* exceptions are OOB and disconnections */
-		FD_SET(cn->handle, &fds_except);
-		maxfd = (cn->handle > maxfd ? cn->handle : maxfd);
-
-		/*
-		 * if connected, we're looking for new incoming data
-		 * if new or lines waiting to be sent, we want
-		 * to know if it's ready or not.
-		 */
-		if (cn_is_connected(cn)) {
-			FD_SET(cn->handle, &fds_read);
-			mylog(LOG_DEBUGTOOMUCH, "Test read on fd %d %d:%d",
-					cn->handle, cn->connected,
-					cn_is_connected(cn));
-		}
-
-		/* we NEVER want to check write on a listening socket */
-		if (cn->listening)
-			continue;
-
-		if (!cn_is_connected(cn) || cn_want_write(cn)) {
-			FD_SET(cn->handle, &fds_write);
-			mylog(LOG_DEBUGTOOMUCH, "Test write on fd %d %d:%d",
-					cn->handle, cn->connected,
-					cn_is_connected(cn));
-		}
-	}
-
-	/* if no connection is active, return the list... empty... */
-	if (maxfd == -1) {
-		struct timespec req, rem;
-		req.tv_sec = *msec * 1000;
-		req.tv_nsec = 0;
-		nanosleep(&req, &rem);
-		*msec = rem.tv_sec;
-		return cn_newdata;
-	}
-
-	tv.tv_sec = *msec / 1000;
-	tv.tv_usec = (*msec % 1000) * 1000;
-	mylog(LOG_DEBUGTOOMUCH, "msec: %d, sec: %d, usec: %d", *msec, tv.tv_sec,
-			tv.tv_usec);
-
-	errtime = clock_gettime(CLOCK_MONOTONIC, &btv);
-	if (errtime != 0) {
-		fatal("clock_gettime: %s", strerror(errno));
-	}
-
-	err = select(maxfd + 1, &fds_read, &fds_write, &fds_except, &tv);
-
-	if (err == 0) {
-		/* select timed-out */
-		mylog(LOG_DEBUGTOOMUCH, "Select timed-out. irc.o timer !");
+	struct timespec before;
+	poller_gettime(&before);
+	poller_wait(global_poller(), *msec);
+	struct timespec after;
+	poller_gettime(&after);
+	if (timedout) {
 		*msec = 0;
-		return cn_newdata;
 	} else {
-		mylog(LOG_DEBUGTOOMUCH, "msec: %d, sec: %d, usec: %d", *msec,
-				tv.tv_sec, tv.tv_usec);
-	}
-
-	errtime = clock_gettime(CLOCK_MONOTONIC, &etv);
-	if (errtime != 0) {
-		fatal("clock_gettime: %s", strerror(errno));
-	}
-
-	if (etv.tv_sec < btv.tv_sec)
-		mylog(LOG_ERROR, "Time rewinded ! not touching interval");
-	else {
-		*msec -= (etv.tv_sec - btv.tv_sec) * 1000
-			+ (etv.tv_nsec - btv.tv_nsec) / 1000000;
-		/* in case we go forward in time */
+		*msec -= (after.tv_sec - before.tv_sec) * 1000 + (after.tv_nsec - before.tv_nsec) / 1000000;
 		if (*msec < 0)
 			*msec = 0;
 	}
-
-	if (err < 0) {
-		if (errno == EINTR)
-			return cn_newdata;
-		fatal("select(): %s", strerror(errno));
-	}
-
-	for (list_it_init(cn_list, &it); list_it_item(&it); list_it_next(&it)) {
-		connection_t *cn = list_it_item(&it);
-		int toadd = 0;
-
-		if (check_event_except(&fds_except, cn)) {
-			mylog(LOG_DEBUGTOOMUCH, "Notify on FD %d (state %d)",
-					cn->handle, cn->connected);
-			list_add_first_uniq(cn_newdata, cn);
-			continue;
-		}
-		if (check_event_write(&fds_write, cn, nc)) {
-			if (cn_is_in_error(cn))
-				toadd = 1;
-		}
-
-		if (check_event_read(&fds_read, cn)) {
-			mylog(LOG_DEBUGTOOMUCH, "Notify on FD %d (state %d)",
-					cn->handle, cn->connected);
-			toadd = 1;
-		}
-		if (toadd)
-			list_add_first_uniq(cn_newdata, cn);
-	}
-	return cn_newdata;
 }
 
 static void create_socket(char *dsthostname, char *dstport, char *srchostname,
@@ -1013,10 +1010,10 @@ static void create_socket(char *dsthostname, char *dstport, char *srchostname,
 	connect_trynext(cn);
 }
 
-
 static void create_listening_socket(char *hostname, char *port,
-		connection_t *cn)
+		listener_t *cn)
 {
+	cn->state = LISTEN_ERROR;
 	int multi_client = 1;
 	int err;
 	struct addrinfo *res, *cur;
@@ -1032,8 +1029,6 @@ static void create_listening_socket(char *hostname, char *port,
 		.ai_next = 0
 	};
 
-	cn->connected = CONN_ERROR;
-
 	err = getaddrinfo(hostname, port, &hint, &res);
 	if (err) {
 		mylog(LOG_ERROR, "getaddrinfo(): %s", gai_strerror(err));
@@ -1045,18 +1040,6 @@ static void create_listening_socket(char *hostname, char *port,
 						cur->ai_protocol)) < 0) {
 			mylog(LOG_WARN, "socket : %s", strerror(errno));
 			continue;
-		}
-
-		if (cn->handle >= FD_SETSIZE) {
-			mylog(LOG_WARN, "too many fd used, close listening socket %d",
-					cn->handle);
-
-			if (close(cn->handle) == -1)
-				mylog(LOG_WARN, "Error on socket close: %s",
-						strerror(errno));
-
-			cn->handle = -1;
-			break;
 		}
 
 		if (setsockopt(cn->handle, SOL_SOCKET, SO_REUSEADDR,
@@ -1085,13 +1068,19 @@ static void create_listening_socket(char *hostname, char *port,
 			continue;
 		}
 
+		descriptor_t* descriptor = poller_register(global_poller(), cn->handle);
+		descriptor->on_in = listener_on_in;
+		descriptor->on_out = listener_on_out;
+		descriptor->on_hup = listener_on_hup;
+		descriptor->data = cn;
+		descriptor_set_events(descriptor, POLLER_IN);
+
 		freeaddrinfo(res);
-		cn->connected = CONN_OK;
+		cn->state = LISTEN_OK;
 		return;
 	}
 	freeaddrinfo(res);
 	mylog(LOG_ERROR, "Unable to bind/listen");
-	cn->connected = CONN_ERROR;
 }
 
 static connection_t *connection_init(int anti_flood, int ssl, int timeout,
@@ -1118,7 +1107,7 @@ static connection_t *connection_init(int anti_flood, int ssl, int timeout,
 	conn->user_data = NULL;
 	conn->listening = listen;
 	conn->handle = -1;
-	conn->client = 0;
+	conn->ssl_client = 1;
 	conn->connecting_data = NULL;
 #ifdef HAVE_LIBSSL
 	conn->ssl_ctx_h = NULL;
@@ -1166,39 +1155,43 @@ static int ctx_set_dh(SSL_CTX *ctx)
 }
 #endif
 
-connection_t *accept_new(connection_t *cn)
+connection_t *accept_new(listener_t *listener)
 {
 	connection_t *conn;
-	int err;
-	socklen_t sa_len = sizeof (struct sockaddr);
+	int handle;
+	socklen_t sa_len = sizeof(struct sockaddr);
 	struct sockaddr sa;
 
-	mylog(LOG_DEBUG, "Trying to accept new client on %d", cn->handle);
-	err = accept(cn->handle, &sa, &sa_len);
-
-	if (err < 0) {
+	mylog(LOG_DEBUG, "Trying to accept new client on %d", listener->handle);
+	handle = accept(listener->handle, &sa, &sa_len);
+	mylog(LOG_DEBUG, "handle: %d -> %d", listener->handle, handle);
+	if (handle < 0) {
 		fatal("accept failed: %s", strerror(errno));
 	}
 
-	if (err >= FD_SETSIZE) {
-		mylog(LOG_WARN, "too many client connected, close %d", err);
+	socket_set_nonblock(handle);
 
-		if (close(err) == -1)
-			mylog(LOG_WARN, "Error on socket close: %s",
-					strerror(errno));
-
-		return NULL;
-	}
-
-	socket_set_nonblock(err);
-
-	conn = connection_init(cn->anti_flood, cn->ssl, cn->timeout, 0);
+	conn = connection_init(listener->anti_flood, listener->ssl,
+			       listener->timeout, 0);
 	conn->connect_time = time(NULL);
-	conn->user_data = cn->user_data;
-	conn->handle = err;
-	conn->client = 1;
+	conn->user_data = listener->user_data;
+	conn->handle = handle;
+	conn->ssl_client = 0;
+	conn->connected = CONN_INPROGRESS;
+
+	descriptor_t *descriptor =
+		poller_register(global_poller(), conn->handle);
+	descriptor->on_in = connection_client_on_in;
+	descriptor->on_out = connection_client_on_out;
+	descriptor->on_hup = connection_client_on_hup;
+	descriptor->data = conn;
+
+	mylog(LOG_DEBUG, "Listening for out: %d 0x%x", conn->handle,
+	      POLLER_OUT);
+	descriptor_set_events(descriptor, POLLER_OUT);
+
 #ifdef HAVE_LIBSSL
-	if (cn->ssl) {
+	if (conn->ssl) {
 		if (!sslctx) {
 			mylog(LOG_DEBUG, "No SSL context available for "
 					"accepted connections. "
@@ -1250,14 +1243,19 @@ connection_t *accept_new(connection_t *cn)
 		SSL_set_accept_state(conn->ssl_h);
 	}
 #endif
-	mylog(LOG_DEBUG, "New client on socket %d !",conn->handle);
+	mylog(LOG_DEBUG, "New client on socket %d !", conn->handle);
 
 	return conn;
 }
 
-connection_t *listen_new(char *hostname, int port, int ssl)
+listener_t *listener_new(char *hostname, int port, int ssl)
 {
-	connection_t *conn;
+	listener_t *listener = bip_malloc(sizeof(listener_t));
+	listener->ssl = ssl;
+	list_init(&listener->accepted_connections, list_ptr_cmp);
+	listener->localip = strdup(hostname);
+	listener->localport = port;
+
 	char portbuf[20];
 	/* TODO: allow litteral service name in the function interface */
 	if (snprintf(portbuf, 20, "%d", port) >= 20)
@@ -1267,10 +1265,8 @@ connection_t *listen_new(char *hostname, int port, int ssl)
 	 * SSL flag is only here to tell program to convert socket to SSL after
 	 * accept(). Listening socket will NOT be SSL
 	 */
-	conn = connection_init(0, ssl, 0, 1);
-	create_listening_socket(hostname, portbuf, conn);
-
-	return conn;
+	create_listening_socket(hostname, portbuf, listener);
+	return listener;
 }
 
 static connection_t *_connection_new(char *dsthostname, char *dstport,
@@ -1425,88 +1421,6 @@ static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 	}
 
 	return result;
-}
-
-static int SSLize(connection_t *cn, int *nc)
-{
-	int err, err2;
-
-	if (cn == NULL)
-		return 1;
-
-	if (cn->listening) {
-		mylog(LOG_ERROR, "Can't use SSL with listening socket.");
-		return 0;
-	}
-
-	if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
-		mylog(LOG_ERROR, "unable to associate FD to SSL structure");
-		cn->connected = CONN_ERROR;
-		return 1;
-	}
-
-	if (cn->client)
-		err = SSL_accept(cn->ssl_h);
-	else
-		err = SSL_connect(cn->ssl_h);
-
-	err2 = SSL_get_error(cn->ssl_h, err);
-	ERR_print_errors(errbio);
-
-	if (err2 == SSL_ERROR_NONE) {
-		const SSL_CIPHER *cipher;
-		char buf[128];
-		int len;
-
-		cipher = SSL_get_current_cipher(cn->ssl_h);
-		SSL_CIPHER_description(cipher, buf, 128);
-		len = strlen(buf);
-		if (len > 0)
-			buf[len - 1] = '\0';
-		mylog(LOG_DEBUG, "Negociated ciphers: %s", buf);
-
-		cn->connected = CONN_OK;
-		connection_connected(cn);
-		*nc = 1;
-		return 0;
-	}
-
-	switch (cn->ssl_check_mode) {
-	case SSL_CHECK_NONE:
-		break;
-	case SSL_CHECK_BASIC:
-		if((err = SSL_get_verify_result(cn->ssl_h)) != X509_V_OK) {
-			mylog(LOG_ERROR, "Certificate check failed: %s (%d)!",
-				X509_verify_cert_error_string(err), err);
-			cn->connected = CONN_UNTRUSTED;
-			return 1;
-		}
-		break;
-	case SSL_CHECK_CA:
-		if((err = SSL_get_verify_result(cn->ssl_h)) != X509_V_OK) {
-			mylog(LOG_ERROR, "Certificate check failed: %s (%d)!",
-				X509_verify_cert_error_string(err), err);
-			cn->connected = CONN_UNTRUSTED;
-			return 1;
-		}
-		break;
-	}
-
-	if (err2 == SSL_ERROR_SYSCALL) {
-		/* socked died */
-		cn->connected = CONN_ERROR;
-		return 1;
-	}
-	/* From now on, we are on error, thus we return 1 to check timeout */
-	if (err2 == SSL_ERROR_ZERO_RETURN || err2 == SSL_ERROR_SSL) {
-		mylog(LOG_ERROR, "Error in SSL handshake.");
-		connection_close(cn);
-		cn->connected = CONN_ERROR;
-		return 1;
-	}
-	/* Here are unhandled errors/resource waiting. Timeout must be
-	 * checked but connection may still be valid */
-	return 1;
 }
 
 static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
@@ -1702,44 +1616,6 @@ static int socket_set_nonblock(int s)
 	}
 	return 1;
 }
-
-#ifdef TEST
-int main(int argc,char* argv[])
-{
-	connection_t *conn, *conn2;
-	int s, cont = 1;
-
-	if (argc != 3) {
-		fprintf(stderr,"Usage: %s host port\n",argv[0]);
-		exit(1);
-	}
-	conn = connection_init(0, 0, 0, 1);
-	conn->connect_time = time(NULL);
-	create_listening_socket(argv[1],argv[2],&conn);
-	if (s == -1) {
-		mylog(LOG_ERROR, "socket() : %s", strerror(errno));
-		exit(1);
-	}
-	mylog(LOG_DEBUG, "Socket number %d",s);
-
-	while (cont) {
-		conn2 = accept_new(conn);
-		if (conn2) {
-			mylog(LOG_DEBUG, "New client");
-			cont = 0;
-		}
-		sleep(1);
-	}
-	while (1) {
-		int ret = read_socket(conn2);
-		mylog(LOG_DEBUGTOOMUCH, "READ: %d %*s",ret, conn2->incoming,
-				conn2->incoming_end);
-		conn2->incoming_end = 0;
-		sleep(1);
-	}
-	return 0;
-}
-#endif
 
 int connection_localport(connection_t *cn)
 {

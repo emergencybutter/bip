@@ -1,4 +1,5 @@
 #ifndef POLLER_H_
+#define POLLER_H_
 
 #include "util.h"
 #include <poll.h>
@@ -33,10 +34,11 @@ typedef struct {
 	sprintf(name, "%x", key);
 
 poller_t *poller_create();
-descriptor_t *poller_new_descriptor(poller_t *p, int fd);
+descriptor_t *poller_register(poller_t *p, int fd);
+void poller_unregister(poller_t *p, int fd);
+descriptor_t *poller_get_descriptor(poller_t *p, int fd);
 void descriptor_set_events(descriptor_t *descriptor, poller_event_t events);
 void descriptor_unset_events(descriptor_t *descriptor, poller_event_t events);
-void poller_remove(poller_t *p, int fd);
 void poller_wait(poller_t *p, int timeout);
 void poller_gettime(struct timespec *time);
 void poller_loop(poller_t *poller);

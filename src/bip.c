@@ -73,6 +73,23 @@ void free_conf(list_t *l);
 #define OIDENTD_FILENAME ".oidentd.conf"
 #endif
 
+void log_file_setup(void)
+{
+	char buf[4096];
+
+	if (conf_log_system && conf_daemonize) {
+		if (conf_global_log_file && conf_global_log_file != stderr)
+			fclose(conf_global_log_file);
+		snprintf(buf, 4095, "%s/bip.log", conf_log_root);
+		FILE *f = fopen(buf, "a");
+		if (!f)
+			fatal("Can't open %s: %s", buf, strerror(errno));
+		conf_global_log_file = f;
+	} else {
+		conf_global_log_file = stderr;
+	}
+}
+
 static void hash_binary(char *hex, unsigned char **password, unsigned int *seed)
 {
 	unsigned char *md5;

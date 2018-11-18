@@ -90,22 +90,7 @@ static void version()
 "Distributed under the GNU Public License Version 2\n");
 }
 
-static void log_file_setup(void)
-{
-	char buf[4096];
-
-	if (conf_log_system && conf_daemonize) {
-		if (conf_global_log_file && conf_global_log_file != stderr)
-			fclose(conf_global_log_file);
-		snprintf(buf, 4095, "%s/bip.log", conf_log_root);
-		FILE *f = fopen(buf, "a");
-		if (!f)
-			fatal("Can't open %s: %s", buf, strerror(errno));
-		conf_global_log_file = f;
-	} else {
-		conf_global_log_file = stderr;
-	}
-}
+void log_file_setup(void);
 
 static pid_t daemonize(void)
 {
@@ -299,7 +284,7 @@ int main(int argc, char **argv)
 	write(fd, buf, strlen(buf));
 	close(fd);
 
-	bip.listener = listen_new(conf_ip, conf_port, conf_css);
+	bip.listener = listener_new(conf_ip, conf_port, conf_css);
 	if (!bip.listener || bip.listener->connected == CONN_ERROR)
 		fatal("Could not create listening socket");
 

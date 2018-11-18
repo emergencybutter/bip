@@ -14,6 +14,7 @@
 #ifndef CONNECTION_H
 #define CONNECTION_H
 #include "util.h"
+#include "poller.h"
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -50,10 +51,16 @@
 #define CONN_NEW 7
 #define CONN_NEED_SSLIZE 8
 #define CONN_UNTRUSTED 9
+#define CONN_SSL_CONNECT 10
+#define CONN_SSL_NEED_RETRY_WRITE 11
+#define CONN_SSL_NEED_RETRY_READ 12
 
 #define WRITE_OK 0
 #define WRITE_ERROR -1
 #define WRITE_KEEP -2
+
+#define READ_OK 0
+#define READ_ERROR -1
 
 #ifdef HAVE_LIBSSL
 #define SSL_CHECK_NONE (0)
@@ -70,7 +77,7 @@ typedef struct connection {
 	int handle;
 	int connected;
 	int listening;
-	int client;
+	int ssl_client;
 	time_t connect_time;
 	time_t timeout;
 	char *incoming;
@@ -90,11 +97,26 @@ typedef struct connection {
 	uint16_t localport, remoteport;
 } connection_t;
 
+#define LISTEN_OK 1
+#define LISTEN_ERROR 2
+
+typedef struct listener {
+	int anti_flood;
+	int state;
+	int ssl;
+	int handle;
+	list_t accepted_connections;
+	char *localip;
+	void *user_data;
+	time_t timeout;
+	uint16_t localport;
+} listener_t;
+
 connection_t *connection_new(char *dsthostname, int dstport, char *srchostname,
 		int srcport, int ssl, char *ssl_ciphers, int ssl_check_mode,
 		char *ssl_check_store, char *ssl_client_certfile, int timeout);
-connection_t *listen_new(char *hostname, int port, int ssl);
-connection_t *accept_new(connection_t *cn);
+listener_t *listener_new(char *hostname, int port, int ssl);
+connection_t *accept_new(listener_t *cn);
 void connection_free(connection_t *cn);
 void connection_close(connection_t *cn);
 
@@ -102,7 +124,7 @@ void write_line(connection_t *cn, char *line);
 void write_lines(connection_t *cn, list_t *lines);
 void write_line_fast(connection_t *cn, char *line);
 list_t *read_lines(connection_t *cn, int *error);
-list_t *wait_event(list_t *cn_list, int *msec, int *nc);
+void wait_event(list_t *listeners_list, list_t *cn_list, int *msec);
 
 int cn_is_connected(connection_t *cn);
 int cn_is_listening(connection_t *cn);
@@ -111,4 +133,7 @@ int connection_localport(connection_t *cn);
 int connection_remoteport(connection_t *cn);
 char *connection_localip(connection_t *cn);
 char *connection_remoteip(connection_t *cn);
+
+poller_t* global_poller();
+
 #endif

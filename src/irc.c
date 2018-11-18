@@ -1974,7 +1974,7 @@ static void server_next(struct link *l)
 		l->cur_server = 0;
 }
 
-static struct link_client *irc_accept_new(connection_t *conn)
+static struct link_client *irc_accept_new(listener_t *conn)
 {
 	struct link_client *ircc;
 	connection_t *newconn;
@@ -2518,11 +2518,6 @@ prot_err:
 	}
 }
 
-/*
- * The main loop
- * inc is the incoming connection, clientl list a list of client struct that
- * represent the accepcted credentials
- */
 void irc_main(bip_t *bip)
 {
 	int timeleft = 1000;
@@ -2554,11 +2549,10 @@ void irc_main(bip_t *bip)
 			bip_tick(bip);
 		}
 
-		int nc;
 		/* Da main loop */
-		list_t *ready = wait_event(&bip->conn_list, &timeleft, &nc);
+		list_t *ready;// = wait_event(&bip->conn_list, &timeleft);
 #ifdef HAVE_OIDENTD
-		if (nc)
+		// keep old and new list of CONN_OK connections, and call this if they differ
 			oidentd_dump(bip);
 #endif
 		while ((conn = list_remove_first(ready)))
@@ -2670,7 +2664,7 @@ static void server_set_chanmodes(struct link_server *l, const char *modes)
 			dup[len] = 0;
 			modes = cur + 1;
 		} else {
-			// emptry string
+			// empty string
 			dup = bip_calloc(1, sizeof(char));
 		}
 		mylog(LOG_DEBUGVERB, "[%s] Modes: '%s'", LINK(l)->name, dup);

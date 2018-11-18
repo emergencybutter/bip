@@ -13,22 +13,55 @@ poller_t *poller_create()
 	p->timeout = -1;
 	p->timed_out = NULL;
 	p->want_exit = 0;
+	poller_gettime(&p->last_timeout);
 	return p;
 }
 
-descriptor_t *poller_new_descriptor(poller_t *p, int fd)
+static int socket_set_nonblock(int s)
+{
+	int flags;
+
+	if ((flags = fcntl(s, F_GETFL, 0)) < 0) {
+		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s",
+				s, strerror(errno));
+		return 0;
+	}
+
+	if (fcntl(s, F_SETFL, flags | O_NONBLOCK) < 0) {
+		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s",
+				s, strerror(errno));
+		return 0;
+	}
+	return 1;
+}
+
+descriptor_t *poller_register(poller_t *p, int fd)
 {
 	INT_KEY(str, fd);
+	assert(hash_get(&p->fds, str) == NULL);
 	descriptor_t *descriptor = bip_malloc(sizeof(descriptor_t));
 	descriptor->fd = fd;
-	int error = fcntl(fd, F_SETFL, O_NONBLOCK);
-	if (error < 0) {
-		fatal("fcntl: %s", strerror(error));
-	}
+	socket_set_nonblock(fd);
 	descriptor->events = 0;
 	descriptor->on_in = descriptor->on_out = descriptor->on_hup = NULL;
 	descriptor->data = NULL;
 	hash_insert(&p->fds, str, descriptor);
+	return descriptor;
+}
+
+
+void poller_unregister(poller_t *p, int fd)
+{
+	INT_KEY(str, fd);
+	free(hash_get(&p->fds, str));
+	hash_remove(&p->fds, str);
+}
+
+descriptor_t *poller_get_descriptor(poller_t *p, int fd)
+{
+	INT_KEY(str, fd);
+	descriptor_t *descriptor = hash_get(&p->fds, str);
+	assert(descriptor != NULL);
 	return descriptor;
 }
 
@@ -40,13 +73,6 @@ void descriptor_set_events(descriptor_t *descriptor, poller_event_t events)
 void descriptor_unset_events(descriptor_t *descriptor, poller_event_t events)
 {
 	descriptor->events &= ~events;
-}
-
-void poller_remove(poller_t *p, int fd)
-{
-	INT_KEY(str, fd);
-	free(hash_get(&p->fds, str));
-	hash_remove(&p->fds, str);
 }
 
 void poller_wait(poller_t *p, int timeout)
@@ -95,11 +121,9 @@ void poller_gettime(struct timespec *time)
 	}
 }
 
-void poller_loop(poller_t *poller)
-{
-	poller_gettime(&poller->last_timeout);
+void poller_one_shot(poller_t* poller) {
 	int timeout_ms = poller->timeout;
-	while (!poller->want_exit) {
+
 		poller_wait(poller, timeout_ms);
 		struct timespec now;
 		poller_gettime(&now);
@@ -114,5 +138,12 @@ void poller_loop(poller_t *poller)
 				timeout_ms = poller->timeout;
 			}
 		}
+}
+
+void poller_loop(poller_t *poller)
+{
+	poller_gettime(&poller->last_timeout);
+	while (!poller->want_exit) {
+		poller_one_shot(poller);
 	}
 }

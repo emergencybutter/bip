@@ -40,8 +40,8 @@ START_TEST(test_poller_basic)
 	poller_pipe(f1);
 
 	poller_t *poller = poller_create();
-	descriptor_t *d1_read = poller_new_descriptor(poller, f1[0]);
-	descriptor_t *d1_write = poller_new_descriptor(poller, f1[1]);
+	descriptor_t *d1_read = poller_register(poller, f1[0]);
+	descriptor_t *d1_write = poller_register(poller, f1[1]);
 	int an_integer = 0;
 	d1_read->on_in = &inc_pointee;
 	d1_read->on_out = &should_not_call;
@@ -121,7 +121,7 @@ START_TEST(test_poller_basic)
 	if (err < 0) {
 		fatal("close: %s\n", strerror(errno));
 	}
-	poller_remove(poller, f1[1]);
+	poller_unregister(poller, f1[1]);
 	poller_wait(poller, 0);
 	ck_assert_int_eq(an_integer, 4);
 }
