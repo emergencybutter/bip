@@ -2548,8 +2548,8 @@ void irc_main(bip_t *bip)
 
 		// keep old and new list of CONN_OK connections, and call this if they differ
 		list_t *ready;// = wait_event(&bip->conn_list, &timeleft);
-		if (nc)
-			oidentd_dump(bip);
+		//if (nc)
+		//	oidentd_dump(bip);
 		while ((conn = list_remove_first(ready)))
 			bip_on_event(bip, conn);
 		list_free(ready);

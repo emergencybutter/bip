@@ -11,5 +11,5 @@ check_line_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@
 
 
 check_connection_SOURCES = check_connection.c $(top_builddir)/src/connection.h
-check_connection_CFLAGS = @CHECK_CFLAGS@
-check_connection_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@
+check_connection_CFLAGS = @CHECK_CFLAGS@ ${OPENSSL_CFLAGS}
+check_connection_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@ ${OPENSSL_LDFLAGS}
