@@ -314,8 +314,9 @@ static int irc_352(struct link_server *server, struct line *line)
 	return OK_COPY_WHO;
 }
 
-static int irc_315(struct link_server *server, UNUSED(struct line *l))
+static int irc_315(struct link_server *server, struct line *l)
 {
+	(void)l;
 	struct link *link = LINK(server);
 	if (link->who_client) {
 		if (link->who_client->who_count == 0) {
@@ -1446,8 +1447,9 @@ static int irc_367(struct link_server *server, struct line *l)
 }
 
 /* same as irc_315 */
-static int irc_368(struct link_server *server, UNUSED(struct line *l))
+static int irc_368(struct link_server *server, struct line *l)
 {
+	(void)l;
 	struct link *link = LINK(server);
 	if (link->who_client) {
 		if (link->who_client->who_count == 0) {
