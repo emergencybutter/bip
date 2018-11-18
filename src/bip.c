@@ -69,10 +69,6 @@ void adm_list_connections(struct link_client *ic, struct bipuser *bu);
 void free_conf(list_t *l);
 
 
-#ifdef HAVE_OIDENTD
-#define OIDENTD_FILENAME ".oidentd.conf"
-#endif
-
 void log_file_setup(void)
 {
 	char buf[4096];
@@ -998,17 +994,12 @@ int fireup(bip_t *bip, FILE *conf)
 		case LEX_PID_FILE:
 			MOVE_STRING(conf_pid_file, t->pdata);
 			break;
-
-#ifdef HAVE_OIDENTD
+		case LEX_WRITE_OIDENTD:
+			bip->write_oidentd = t->ndata;
+			break;
 		case LEX_OIDENTD_FILE:
 			MOVE_STRING(bip->oidentdpath, t->pdata);
 			break;
-#else
-		case LEX_OIDENTD_FILE:
-			mylog(LOG_WARN, "Found oidentd option whereas bip is "
-					"not built with oidentd support.");
-			break;
-#endif
 		case LEX_ALWAYS_BACKLOG:
 			hds.always_backlog = t->ndata;
 			break;
