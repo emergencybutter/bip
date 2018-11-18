@@ -14,7 +14,6 @@ libbip_a_SOURCES = conf.y lex.l \
 	poller.c poller.h
 
 libbip_a_CFLAGS = $(OPENSSL_CFLAGS)
-libbip_a_LIBADD = $(OPENSSL_LIBS)
 
 bin_PROGRAMS = bip bipmkpw
 
