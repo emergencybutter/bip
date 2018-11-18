@@ -23,6 +23,7 @@ AS_IF([test x"$YACC" = "xyacc"], [
     YACC=${am_missing_run}yacc
   ])
 ])
+PKG_PROG_PKG_CONFIG
 
 # Checks for header files.
 AC_FUNC_ALLOCA
@@ -123,12 +124,13 @@ AS_IF([test "x$enable_pie" != "xno"], [
 	fi
 ])
 
-AS_IF([test "x$enable_tests" != "xno"], [
-       PKG_CHECK_MODULES([CHECK], [check >= 0.9.6])
-])
+PKG_CHECK_MODULES([CHECK], [check >= 0.9.6], [
+	AC_CONFIG_FILES([tests/Makefile])
+	enable_tests=yes
+], [])
 
 
-AC_CONFIG_FILES([Makefile src/Makefile tests/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT
 
 AS_IF([test "x$with_openssl" != "xno"], [
