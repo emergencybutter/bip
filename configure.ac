@@ -41,11 +41,6 @@ if test "$ap_cv_cc_pie" = "yes"; then
 	enable_pie=yes
 fi
 
-PKG_CHECK_MODULES([CHECK], [check >= 0.9.6], [
-		   AC_CONFIG_FILES([tests/Makefile])
-		   enable_tests=yes
-		   ], [ enable_tests=no ])
-
 AC_CHECK_FUNC(backtrace_symbols_fd, [
         AC_DEFINE(HAVE_BACKTRACE, [], [Use glibc backtrace on fatal()])
         LDFLAGS="-rdynamic $LDFLAGS"
@@ -53,6 +48,10 @@ AC_CHECK_FUNC(backtrace_symbols_fd, [
 ])
 
 
+PKG_CHECK_MODULES([CHECK], [check >= 0.9.6], [
+		   AC_CONFIG_FILES([tests/Makefile])
+		   enable_tests=yes
+		   ], [ enable_tests=no ])
 AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT
 
