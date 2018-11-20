@@ -13,6 +13,7 @@
 
 #ifndef CONNECTION_H
 #define CONNECTION_H
+#include "config.h"
 #include "util.h"
 #include "poller.h"
 #include <signal.h>
@@ -68,10 +69,28 @@
 #define SSL_CHECK_CA (2)
 #endif
 
+typedef struct {
+	char *ciphers;
+	char *dh_file;
+	char *cert_pem_file;
+} listener_ssl_options_t;
+void listener_ssl_options_init(listener_ssl_options_t* options);
+
+typedef struct {
+	// Ciphers to allow when connecting to an irc network.
+	char *ssl_ciphers;
+	// SSL check mode when connection to an irc network.
+	int ssl_check_mode;
+	// SSL store to use to trust CAs. Defaults to system CAs.
+	char *ssl_check_store;
+	// SSL client certificate to use.
+	char *ssl_client_certfile;
+} connection_ssl_options_t;
+void connection_ssl_options_init(connection_ssl_options_t* options);
+
 struct connecting_data;
 typedef struct connection {
 	int anti_flood;
-	int ssl;
 	unsigned long lasttoken;
 	unsigned token;
 	int handle;
@@ -103,19 +122,20 @@ typedef struct connection {
 typedef struct listener {
 	int anti_flood;
 	int state;
-	int ssl;
 	int handle;
 	list_t accepted_connections;
 	char *localip;
 	void *user_data;
 	time_t timeout;
 	uint16_t localport;
+#ifdef HAVE_LIBSSL
+	SSL_CTX* ssl_context;
+#endif
 } listener_t;
 
 connection_t *connection_new(char *dsthostname, int dstport, char *srchostname,
-		int srcport, int ssl, char *ssl_ciphers, int ssl_check_mode,
-		char *ssl_check_store, char *ssl_client_certfile, int timeout);
-listener_t *listener_new(char *hostname, int port, int ssl);
+		int srcport, connection_ssl_options_t* ssl_options, int timeout);
+listener_t *listener_new(char *hostname, int port, listener_ssl_options_t* ssl_options);
 connection_t *accept_new(listener_t *cn);
 void connection_free(connection_t *cn);
 void connection_close(connection_t *cn);
@@ -135,5 +155,8 @@ char *connection_localip(connection_t *cn);
 char *connection_remoteip(connection_t *cn);
 
 poller_t* global_poller();
+
+void connection_ssl_initialize();
+
 
 #endif

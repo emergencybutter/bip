@@ -238,7 +238,7 @@ struct link_server {
 };
 
 typedef struct bip {
-	connection_t *listener;
+	listener_t *listener;
 	/* all connected tcp connections */
 	list_t conn_list;
 	/* all links */

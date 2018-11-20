@@ -21,7 +21,6 @@
 
 #ifdef HAVE_LIBSSL
 static int ssl_initialized = 0;
-static SSL_CTX *sslctx = NULL;
 static int ssl_cx_idx;
 extern FILE *conf_global_log_file;
 static BIO *errbio = NULL;
@@ -48,6 +47,16 @@ static void maybe_trigger_write_event(connection_t *cn);
 static int cn_is_in_error(connection_t *cn);
 static void connection_save_endpoints(connection_t *c);
 static int connection_want_write(connection_t *cn);
+static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options);
+
+void listener_ssl_options_init(listener_ssl_options_t* options) {
+	memset(options, 0, sizeof(listener_ssl_options_t));
+}
+
+void connection_ssl_options_init(connection_ssl_options_t* options) {
+	memset(options, 0, sizeof(connection_ssl_options_t));
+	options->ssl_check_mode = SSL_CHECK_CA;
+}
 
 poller_t* global_poller() {
 	static poller_t *poller = NULL;
@@ -105,20 +114,18 @@ void connection_free(connection_t *cn)
 		connecting_data_free(cn->connecting_data);
 	/* conn->user_data */
 #ifdef HAVE_LIBSSL
-	if (cn->ssl) {
-		if (cn->cert) {
-			X509_free(cn->cert);
-			cn->cert = NULL;
-		}
-		if (cn->ssl_h) {
-			SSL_shutdown(cn->ssl_h);
-			SSL_free(cn->ssl_h);
-			cn->ssl_h = NULL;
-		}
-		if (cn->ssl_ctx_h) {
-			SSL_CTX_free(cn->ssl_ctx_h);
-			cn->ssl_ctx_h = NULL;
-		}
+	if (cn->cert) {
+		X509_free(cn->cert);
+		cn->cert = NULL;
+	}
+	if (cn->ssl_h) {
+		SSL_shutdown(cn->ssl_h);
+		SSL_free(cn->ssl_h);
+		cn->ssl_h = NULL;
+	}
+	if (cn->ssl_ctx_h) {
+		SSL_CTX_free(cn->ssl_ctx_h);
+		cn->ssl_ctx_h = NULL;
 	}
 #endif
 	if (cn->localip) {
@@ -243,12 +250,12 @@ static void connection_client_on_in(void *data)
 		connection_client_ssl_connect(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_WRITE:
-		assert(cn->ssl);
+		assert(cn->ssl_ctx_h);
 		assert(cn->partial != NULL);
 		real_write_all(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_READ:
-		assert(cn->ssl);
+		assert(cn->ssl_ctx_h);
 		real_read_all(cn);
 		break;
 	case CONN_OK:
@@ -263,7 +270,7 @@ void real_read_all(connection_t *cn)
 {
 	int ret;
 #ifdef HAVE_LIBSSL
-	if (cn->ssl)
+	if (cn->ssl_ctx_h)
 		ret = read_socket_SSL(cn);
 	else
 #endif
@@ -305,7 +312,7 @@ static void connection_client_on_out(void *data)
 			cn->connecting_data = NULL;
 		}
 		connection_save_endpoints(cn);
-		if (!cn->ssl) {
+		if (!cn->ssl_ctx_h) {
 			cn->connected = CONN_OK;
 			descriptor_unset_events(descriptor, POLLER_OUT);
 			return;
@@ -329,12 +336,12 @@ static void connection_client_on_out(void *data)
 		real_write_all(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_WRITE:
-		assert(cn->ssl);
+		assert(cn->ssl_ctx_h);
 		assert(cn->partial != NULL);
 		real_write_all(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_READ:
-		assert(cn->ssl);
+		assert(cn->ssl_ctx_h);
 		real_read_all(cn);
 		break;
 	default:
@@ -581,7 +588,7 @@ static int _write_socket(connection_t *cn, char *message)
 static int write_socket(connection_t *cn, char *line)
 {
 #ifdef HAVE_LIBSSL
-	if (cn->ssl)
+	if (cn->ssl_ctx_h)
 		return _write_socket_SSL(cn, line);
 	else
 #endif
@@ -865,6 +872,9 @@ static int cn_is_in_error(connection_t *cn)
 	case CONN_INPROGRESS:
 	case CONN_NEED_SSLIZE:
 	case CONN_OK:
+	case CONN_SSL_CONNECT:
+	case CONN_SSL_NEED_RETRY_WRITE:
+	case CONN_SSL_NEED_RETRY_READ:
 		return 0;
 	default:
 		fatal("internal error 10");
@@ -1083,7 +1093,7 @@ static void create_listening_socket(char *hostname, char *port,
 	mylog(LOG_ERROR, "Unable to bind/listen");
 }
 
-static connection_t *connection_init(int anti_flood, int ssl, int timeout,
+static connection_t *connection_init(int anti_flood, int timeout,
 		int listen)
 {
 	connection_t *conn;
@@ -1095,7 +1105,6 @@ static connection_t *connection_init(int anti_flood, int ssl, int timeout,
 	outgoing = list_new(NULL);
 
 	conn->anti_flood = anti_flood;
-	conn->ssl = ssl;
 	conn->lasttoken = 0;
 	conn->token = TOKEN_MAX;
 	conn->timeout = (listen ? 0 : timeout);
@@ -1120,16 +1129,16 @@ static connection_t *connection_init(int anti_flood, int ssl, int timeout,
 }
 
 #ifdef HAVE_LIBSSL
-static int ctx_set_dh(SSL_CTX *ctx)
+static int connection_ssl_ctx_set_dh(SSL_CTX *ctx, const char* dh_file)
 {
 	/* Return ephemeral DH parameters. */
 	DH *dh = NULL;
 	FILE *f;
 	int ret;
 
-	if ((f = fopen(conf_client_dh_file, "r")) == NULL) {
+	if ((f = fopen(dh_file, "r")) == NULL) {
 		mylog(LOG_ERROR, "Unable to open DH parameters (%s): %s",
-				conf_client_dh_file, strerror(errno));
+				dh_file, strerror(errno));
 		return 0;
 	}
 
@@ -1171,8 +1180,7 @@ connection_t *accept_new(listener_t *listener)
 
 	socket_set_nonblock(handle);
 
-	conn = connection_init(listener->anti_flood, listener->ssl,
-			       listener->timeout, 0);
+	conn = connection_init(listener->anti_flood, listener->timeout, /*listen=*/1);
 	conn->connect_time = time(NULL);
 	conn->user_data = listener->user_data;
 	conn->handle = handle;
@@ -1191,53 +1199,10 @@ connection_t *accept_new(listener_t *listener)
 	descriptor_set_events(descriptor, POLLER_OUT);
 
 #ifdef HAVE_LIBSSL
-	if (conn->ssl) {
-		if (!sslctx) {
-			mylog(LOG_DEBUG, "No SSL context available for "
-					"accepted connections. "
-					"Initializing...");
-			if (!(sslctx = SSL_init_context(conf_client_ciphers))) {
-				mylog(LOG_ERROR, "SSL context initialization "
-						"failed");
-				connection_free(conn);
-				return NULL;
-			}
-
-			if (!conf_client_dh_file) {
-				// try with a default path but don't fail if it doesn't exist
-				conf_client_dh_file = default_path(conf_biphome, "dh.pem",
-						"DH parameters");
-
-				struct stat st_buf;
-				if (stat(conf_client_dh_file, &st_buf) != 0) {
-					free(conf_client_dh_file);
-					conf_client_dh_file = NULL;
-				}
-			}
-
-			if (conf_client_dh_file) {
-				if (!ctx_set_dh(sslctx)) {
-					mylog(LOG_ERROR, "SSL Unable to load DH "
-							"parameters");
-					connection_free(conn);
-					return NULL;
-				}
-			}
-
-			if (!SSL_CTX_use_certificate_chain_file(sslctx,
-						conf_ssl_certfile))
-				mylog(LOG_WARN, "SSL: Unable to load "
-						"certificate file");
-			if (!SSL_CTX_use_PrivateKey_file(sslctx,
-						conf_ssl_certfile,
-						SSL_FILETYPE_PEM))
-				mylog(LOG_WARN, "SSL: Unable to load key file");
-		}
-
-		conn->ssl_h = SSL_new(sslctx);
+	if (listener->ssl_context) {
+		conn->ssl_h = SSL_new(listener->ssl_context);
 		if (!conn->ssl_h) {
 			connection_free(conn);
-			SSL_CTX_free(sslctx);
 			return NULL;
 		}
 		SSL_set_accept_state(conn->ssl_h);
@@ -1248,10 +1213,10 @@ connection_t *accept_new(listener_t *listener)
 	return conn;
 }
 
-listener_t *listener_new(char *hostname, int port, int ssl)
+listener_t *listener_new(char *hostname, int port,
+			 listener_ssl_options_t *options)
 {
 	listener_t *listener = bip_malloc(sizeof(listener_t));
-	listener->ssl = ssl;
 	list_init(&listener->accepted_connections, list_ptr_cmp);
 	listener->localip = strdup(hostname);
 	listener->localport = port;
@@ -1261,11 +1226,15 @@ listener_t *listener_new(char *hostname, int port, int ssl)
 	if (snprintf(portbuf, 20, "%d", port) >= 20)
 		portbuf[19] = '\0';
 
-	/*
-	 * SSL flag is only here to tell program to convert socket to SSL after
-	 * accept(). Listening socket will NOT be SSL
-	 */
 	create_listening_socket(hostname, portbuf, listener);
+
+	listener->ssl_context = NULL;
+	if (options != NULL) {
+		listener->ssl_context = listener_ssl_context(options);
+		if (listener->ssl_context == NULL) {
+			fatal("Could not initialize SSL subsystem.");
+		}
+	}
 	return listener;
 }
 
@@ -1274,64 +1243,72 @@ static connection_t *_connection_new(char *dsthostname, char *dstport,
 {
 	connection_t *conn;
 
-	conn = connection_init(1, 0, timeout, 0);
+	conn = connection_init(1, timeout, /*listen=*/0);
 	create_socket(dsthostname, dstport, srchostname, srcport, conn);
 
 	return conn;
 }
 
 #ifdef HAVE_LIBSSL
-static SSL_CTX *SSL_init_context(char *ciphers)
+
+void connection_ssl_initialize()
 {
-	int fd, flags, ret, rng;
-	char buf[1025];
-	SSL_CTX *ctx;
+	static int initialized = 0;
+	if (initialized) {
+		return;
+	}
+	initialized = 1;
 
-	if (!ssl_initialized) {
-		SSL_library_init();
-		SSL_load_error_strings();
-		errbio = BIO_new_fp(conf_global_log_file, BIO_NOCLOSE);
+	int ret, rng;
 
-		ssl_cx_idx = SSL_get_ex_new_index(0, "bip connection_t",
-			NULL, NULL,NULL);
+	SSL_library_init();
+	SSL_load_error_strings();
+	errbio = BIO_new_fp(conf_global_log_file, BIO_NOCLOSE);
 
-		flags = O_RDONLY;
-		flags |= O_NONBLOCK;
-		fd = open("/dev/random", flags);
-		if (fd < 0) {
-			mylog(LOG_WARN, "SSL: /dev/random not ready, unable "
-					"to manually seed PRNG.");
-			goto prng_end;
-		}
+	ssl_cx_idx =
+		SSL_get_ex_new_index(0, "bip connection_t", NULL, NULL, NULL);
 
-		do {
-			ret = read(fd, buf, 1024);
-			if (ret <= 0) {
-				mylog(LOG_ERROR,"/dev/random: %s",
-						strerror(errno));
-				goto prng_end;
-			}
-			mylog(LOG_DEBUG, "PRNG seeded with %d /dev/random "
-					"bytes", ret);
-			RAND_seed(buf, ret);
-		} while (!(rng = RAND_status()));
-
-prng_end:
-		do {
-			ret = close(fd);
-		} while (ret != 0 && errno == EINTR);
-		if (RAND_status()) {
-			mylog(LOG_DEBUG, "SSL: PRNG is seeded !");
-		} else {
-			mylog(LOG_WARN, "SSL: PRNG is not seeded enough");
-			mylog(LOG_WARN, "     OpenSSL will use /dev/urandom if "
-					 "available.");
-		}
-
-		ssl_initialized = 1;
+	int flags = O_RDONLY | O_NONBLOCK;
+	int fd = open("/dev/random", flags);
+	if (fd < 0) {
+		mylog(LOG_WARN,
+		      "SSL: /dev/random not ready, unable "
+		      "to manually seed PRNG.");
+		goto prng_end;
 	}
 
-	/* allocated by function */
+	do {
+		char buf[1025];
+		int ret = read(fd, buf, 1024);
+		if (ret <= 0) {
+			mylog(LOG_ERROR, "/dev/random: %s", strerror(errno));
+			goto prng_end;
+		}
+		mylog(LOG_DEBUG,
+		      "PRNG seeded with %d /dev/random "
+		      "bytes",
+		      ret);
+		RAND_seed(buf, ret);
+	} while (!(rng = RAND_status()));
+
+prng_end:
+	do {
+		ret = close(fd);
+	} while (ret != 0 && errno == EINTR);
+	if (RAND_status()) {
+		mylog(LOG_DEBUG, "SSL: PRNG is seeded !");
+	} else {
+		mylog(LOG_WARN, "SSL: PRNG is not seeded enough");
+		mylog(LOG_WARN,
+		      "     OpenSSL will use /dev/urandom if "
+		      "available.");
+	}
+}
+
+static SSL_CTX *connection_create_ssl_context(char *ciphers)
+{
+	SSL_CTX *ctx;
+
 	if (!(ctx = SSL_CTX_new(SSLv23_method()))) {
 		ERR_print_errors(errbio);
 		return NULL;
@@ -1345,6 +1322,34 @@ prng_end:
 	}
 
 	return ctx;
+}
+
+static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options)
+{
+	SSL_CTX *sslctx = NULL;
+	if (!(sslctx = connection_create_ssl_context(options->ciphers))) {
+		mylog(LOG_ERROR,
+		      "SSL context initialization "
+		      "failed");
+		return NULL;
+	}
+
+	if (options->dh_file) {
+		if (!connection_ssl_ctx_set_dh(sslctx, options->dh_file)) {
+			mylog(LOG_ERROR,
+			      "SSL Unable to load DH parameters");
+			return NULL;
+		}
+	}
+
+	if (!SSL_CTX_use_certificate_chain_file(sslctx, options->cert_pem_file))
+		mylog(LOG_WARN,
+		      "SSL: Unable to load certificate file");
+	if (!SSL_CTX_use_PrivateKey_file(sslctx, options->cert_pem_file,
+					 SSL_FILETYPE_PEM))
+		mylog(LOG_WARN, "SSL: Unable to load key file");
+
+	return sslctx;
 }
 
 static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
@@ -1424,31 +1429,30 @@ static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 }
 
 static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
-		char *srchostname, char *srcport, char *ciphers, int check_mode,
-		char *check_store, char *ssl_client_certfile, int timeout)
+		char *srchostname, char *srcport, connection_ssl_options_t* ssl_options, int timeout)
 {
 	connection_t *conn;
 
-	conn = connection_init(1, 1, timeout, 0);
-	if (!(conn->ssl_ctx_h = SSL_init_context(ciphers))) {
+	conn = connection_init(1, timeout, /*listen=*/0);
+	if (!(conn->ssl_ctx_h = connection_create_ssl_context(ssl_options->ssl_ciphers))) {
 		mylog(LOG_ERROR, "SSL context initialization failed");
 		return conn;
 	}
 
 	conn->cert = NULL;
-	conn->ssl_check_mode = check_mode;
+	conn->ssl_check_mode = ssl_options->ssl_check_mode;
 
 	switch (conn->ssl_check_mode) {
 	struct stat st_buf;
 	case SSL_CHECK_BASIC:
-		if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, check_store,
+		if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, ssl_options->ssl_check_store,
 				NULL)) {
 			mylog(LOG_ERROR, "Can't assign check store to "
 					"SSL connection! Proceeding without!");
 		}
 		break;
 	case SSL_CHECK_CA:
-		if (!check_store) {
+		if (!ssl_options->ssl_check_store) {
 			if (SSL_CTX_set_default_verify_paths(conn->ssl_ctx_h)) {
 				mylog(LOG_INFO, "No SSL certificate check store configured. "
 						"Default store will be used.");
@@ -1460,10 +1464,10 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 			}
 		}
 		// Check if check_store is a file or directory
-		if (stat(check_store, &st_buf) == 0) {
+		if (stat(ssl_options->ssl_check_store, &st_buf) == 0) {
 			if (st_buf.st_mode & S_IFDIR) {
 				if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, NULL,
-						check_store)) {
+						ssl_options->ssl_check_store)) {
 					mylog(LOG_ERROR, "Can't assign check store to "
 							"SSL connection!");
 					return conn;
@@ -1471,7 +1475,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 				break;
 			}
 			if (st_buf.st_mode & S_IFREG) {
-				if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, check_store,
+				if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, ssl_options->ssl_check_store,
 						NULL)) {
 					mylog(LOG_ERROR, "Can't assign check store to "
 							"SSL connection!");
@@ -1505,16 +1509,16 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 		fatal("Unknown SSL cert check mode.");
 	}
 
-	if (ssl_client_certfile) {
+	if (ssl_options->ssl_client_certfile) {
 		if (!SSL_CTX_use_certificate_chain_file(conn->ssl_ctx_h,
-					ssl_client_certfile))
+					ssl_options->ssl_client_certfile))
 			mylog(LOG_WARN, "SSL: Unable to load certificate file");
 		else if (!SSL_CTX_use_PrivateKey_file(conn->ssl_ctx_h,
-					ssl_client_certfile, SSL_FILETYPE_PEM))
+					ssl_options->ssl_client_certfile, SSL_FILETYPE_PEM))
 			mylog(LOG_WARN, "SSL: Unable to load key file");
 		else
 			mylog(LOG_INFO, "SSL: using %s pem file as client SSL "
-					"certificate", ssl_client_certfile);
+					"certificate", ssl_options->ssl_client_certfile);
 	}
 
 	conn->ssl_h = SSL_new(conn->ssl_ctx_h);
@@ -1540,16 +1544,11 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 #endif
 
 connection_t *connection_new(char *dsthostname, int dstport, char *srchostname,
-		int srcport, int ssl, char *ssl_ciphers, int ssl_check_mode,
-		char *ssl_check_store, char *ssl_client_certfile, int timeout)
+		int srcport, connection_ssl_options_t* options, int timeout)
 {
 	char dstportbuf[20], srcportbuf[20], *tmp;
 #ifndef HAVE_LIBSSL
-	(void)ssl;
-	(void)ssl_ciphers;
-	(void)ssl_check_mode;
-	(void)ssl_check_store;
-	(void)ssl_client_certfile;
+	(void)options;
 #endif
 	/* TODO: allow litteral service name in the function interface */
 	if (snprintf(dstportbuf, 20, "%d", dstport) >= 20)
@@ -1561,10 +1560,9 @@ connection_t *connection_new(char *dsthostname, int dstport, char *srchostname,
 	} else
 		tmp = NULL;
 #ifdef HAVE_LIBSSL
-	if (ssl)
+	if (options)
 		return _connection_new_SSL(dsthostname, dstportbuf, srchostname,
-				tmp, ssl_ciphers, ssl_check_mode, ssl_check_store,
-				ssl_client_certfile, timeout);
+				tmp, options, timeout);
 	else
 #endif
 		return _connection_new(dsthostname, dstportbuf, srchostname,

@@ -18,6 +18,7 @@ typedef struct {
 	void (*on_out)(void *data);
 	void (*on_hup)(void *data);
 	void *data;
+	int removed;
 } descriptor_t;
 
 typedef struct {

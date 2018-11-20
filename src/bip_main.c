@@ -245,27 +245,48 @@ int main(int argc, char **argv)
 	}
 
 #ifdef HAVE_LIBSSL
+	listener_ssl_options_t listener_ssl_options;
+	listener_ssl_options_init(&listener_ssl_options);
+
 	if (conf_css) {
 		int e;
 		struct stat fs;
 
 		if (!conf_ssl_certfile) {
-			conf_ssl_certfile = default_path(conf_biphome, "bip.pem",
-					"SSL certificate");
+			conf_ssl_certfile = default_path(
+				conf_biphome, "bip.pem", "SSL certificate");
 		}
 		assert_path_exists(conf_ssl_certfile);
+		listener_ssl_options.cert_pem_file = conf_ssl_certfile;
 
 		e = stat(conf_ssl_certfile, &fs);
 		if (e)
-			mylog(LOG_WARN, "Unable to check PEM file, stat(%s): "
-				"%s", conf_ssl_certfile, strerror(errno));
+			mylog(LOG_WARN,
+			      "Unable to check PEM file, stat(%s): "
+			      "%s",
+			      conf_ssl_certfile, strerror(errno));
 		else if ((fs.st_mode & S_IROTH) | (fs.st_mode & S_IWOTH))
-			mylog(LOG_ERROR, "PEM file %s should not be world "
-				"readable / writable. Please fix the modes.",
-				conf_ssl_certfile);
+			mylog(LOG_ERROR,
+			      "PEM file %s should not be world "
+			      "readable / writable. Please fix the modes.",
+			      conf_ssl_certfile);
 
+
+		if (!conf_client_dh_file && conf_biphome) {
+			// try with a default path but don't fail if it doesn't
+			// exist
+			conf_client_dh_file = default_path(
+				conf_biphome, "dh.pem", "DH parameters");
+
+			struct stat st_buf;
+			if (stat(conf_client_dh_file, &st_buf) != 0) {
+				free(conf_client_dh_file);
+				conf_client_dh_file = NULL;
+			}
+		}
 		if (conf_client_dh_file) {
 			assert_path_exists(conf_client_dh_file);
+			listener_ssl_options.dh_file = conf_client_dh_file;
 		}
 	}
 #endif
@@ -283,8 +304,9 @@ int main(int argc, char **argv)
 	write(fd, buf, strlen(buf));
 	close(fd);
 
-	bip.listener = listener_new(conf_ip, conf_port, conf_css);
-	if (!bip.listener || bip.listener->connected == CONN_ERROR)
+	bip.listener = listener_new(conf_ip, conf_port,
+			conf_css ? &listener_ssl_options : NULL);
+	if (!bip.listener || bip.listener->handle == -1)
 		fatal("Could not create listening socket");
 
 	for (;;) {

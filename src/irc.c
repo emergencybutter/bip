@@ -2166,15 +2166,19 @@ connection_t *irc_server_connect(struct link *link)
 		"%s:%d", link->name, link->user->name,
 		link->network->serverv[link->cur_server].host,
 		link->network->serverv[link->cur_server].port);
+#ifdef HAVE_LIBSSL
+	connection_ssl_options_t options;
+	connection_ssl_options_init(&options);
+	options.ssl_ciphers = link->network->ciphers;
+	options.ssl_check_mode = link->ssl_check_mode;
+	options.ssl_check_store = link->user->ssl_check_store;
+	options.ssl_client_certfile = link->user->ssl_client_certfile;
+#endif
 	conn = connection_new(link->network->serverv[link->cur_server].host,
 				link->network->serverv[link->cur_server].port,
 				link->vhost, link->bind_port,
 #ifdef HAVE_LIBSSL
-				link->network->ssl,
-				link->network->ciphers,
-				link->ssl_check_mode,
-				link->user->ssl_check_store,
-				link->user->ssl_client_certfile,
+				link->network->ssl ? &options : NULL,
 #else
 				0, NULL, 0, NULL, NULL,
 #endif
@@ -2442,8 +2446,8 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 {
 	struct link_any *lc = (struct link_any *)conn->user_data;
 
-	if (conn == bip->listener) {
-		struct link_client *n = irc_accept_new(conn);
+	if ((listener_t*)conn == bip->listener) {
+		struct link_client *n = irc_accept_new(bip->listener);
 		if (n) {
 			list_add_last(&bip->conn_list, CONN(n));
 			list_add_last(&bip->connecting_client_list, n);
