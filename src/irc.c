@@ -1973,12 +1973,12 @@ static void server_next(struct link *l)
 		l->cur_server = 0;
 }
 
-static struct link_client *irc_accept_new(listener_t *conn)
+static struct link_client *irc_accept_new(listener_t *listener)
 {
 	struct link_client *ircc;
 	connection_t *newconn;
 
-	newconn = accept_new(conn);
+	newconn = list_remove_first(&listener->accepted_connections);
 	if (!newconn)
 		return NULL;
 
@@ -2180,7 +2180,7 @@ connection_t *irc_server_connect(struct link *link)
 #ifdef HAVE_LIBSSL
 				link->network->ssl ? &options : NULL,
 #else
-				0, NULL, 0, NULL, NULL,
+				NULL,
 #endif
 				CONNECT_TIMEOUT);
 	assert(conn);
@@ -2442,20 +2442,21 @@ void bip_tick(bip_t *bip)
 	timeout_clean_who_counts(&bip->link_list);
 }
 
+void bip_on_listener_event(bip_t *bip, listener_t *listener)
+{
+	struct link_any *lc = (struct link_any *)listener->user_data;
+
+	struct link_client *n;
+	while (n = irc_accept_new(bip->listener)) {
+		list_add_last(&bip->conn_list, CONN(n));
+		list_add_last(&bip->connecting_client_list, n);
+	}
+	oidentd_dump(bip);
+}
+
 void bip_on_event(bip_t *bip, connection_t *conn)
 {
 	struct link_any *lc = (struct link_any *)conn->user_data;
-
-	if ((listener_t*)conn == bip->listener) {
-		struct link_client *n = irc_accept_new(bip->listener);
-		if (n) {
-			list_add_last(&bip->conn_list, CONN(n));
-			list_add_last(&bip->connecting_client_list, n);
-		}
-		return;
-	}
-
-	/* reached only if socket is not listening */
 	int err;
 	list_t *linel = read_lines(conn, &err);
 	if (err) {
@@ -2531,16 +2532,7 @@ void irc_main(bip_t *bip)
 		bip->reloading_client = NULL;
 	}
 
-	/*
-	 * If the list is empty, we are starting. Otherwise we are reloading,
-	 * and conn_list is kept accross reloads.
-	 */
-	if (list_is_empty(&bip->conn_list))
-		list_add_first(&bip->conn_list, bip->listener);
-
 	while (!sighup) {
-		connection_t *conn;
-
 		if (timeleft == 0) {
 			/*
 			 * Compute timeouts for next reconnections and lagouts
@@ -2548,6 +2540,18 @@ void irc_main(bip_t *bip)
 
 			timeleft = 1000;
 			bip_tick(bip);
+		}
+
+		poller_wait(global_poller(), timeleft);
+		if (list_is_empty(&bip->listener->accepted_connections)) {
+			bip_on_listener_event(bip, bip->listener);
+		}
+		list_iterator_t it;
+		connection_t* conn;
+		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
+			if (list_is_empty(conn->incoming_lines))
+				continue;
+			bip_on_event(bip, conn);
 		}
 
 		// keep old and new list of CONN_OK connections, and call this if they differ
