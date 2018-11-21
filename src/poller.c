@@ -58,6 +58,21 @@ void poller_unregister(poller_t *p, int fd)
 	descriptor->removed = 1;
 }
 
+void poller_unregister_finalize_iterator(hash_iterator_t* hi, descriptor_t* descriptor) {
+	hash_it_remove(hi);
+	free(descriptor);
+}
+
+void poller_unregister_finalize(poller_t *p, int fd) {
+	INT_KEY(str, fd);
+	descriptor_t* descriptor = hash_get(&p->fds, str);
+	if (!descriptor) {
+		fatal("descriptor not found %s", str);
+	}
+	hash_remove(&p->fds, str);
+	free(descriptor);
+}
+
 descriptor_t *poller_get_descriptor(poller_t *p, int fd)
 {
 	INT_KEY(str, fd);
@@ -86,10 +101,10 @@ void poller_wait(poller_t *p, int timeout)
 	for (hash_it_init(&p->fds, &hi); hash_it_item(&hi); hash_it_next(&hi)) {
 		descriptor_t *descriptor = hash_it_item(&hi);
 		if (descriptor->removed) {
-			hash_it_remove(&hi);
-			free(descriptor);
+			poller_unregister_finalize_iterator(&hi, descriptor);
 			continue;
 		}
+		mylog(LOG_DEBUG, "polling: %d", descriptor->fd);
 		if (descriptor->events != 0) {
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
@@ -109,8 +124,7 @@ void poller_wait(poller_t *p, int timeout)
 	int *removed_fds = bip_malloc(sizeof(int) * num_fds);
 	int num_removed_fds = 0;
 	for (int i = 0; i < num_fds; i++) {
-		INT_KEY(str, fds[i].fd);
-		descriptor_t *descriptor = hash_get(&p->fds, str);
+		descriptor_t* descriptor = poller_get_descriptor(p, fds[i].fd);
 		if (fds[i].revents & POLLIN)
 			descriptor->on_in(descriptor->data);
 		if (!descriptor->removed && fds[i].revents & POLLOUT)
@@ -118,8 +132,7 @@ void poller_wait(poller_t *p, int timeout)
 		if (!descriptor->removed && fds[i].revents & POLLHUP)
 			descriptor->on_hup(descriptor->data);
 		if (descriptor->removed) {
-			hash_remove(&p->fds, descriptor->fd);
-			free(descriptor);
+			poller_unregister_finalize(p, descriptor->fd);
 		}
 	}
 	free(fds);

@@ -268,6 +268,7 @@ static void connection_client_on_in(void *data)
 
 void real_read_all(connection_t *cn)
 {
+	mylog(LOG_DEBUG, "real_read_all %d", cn->handle);
 	int ret;
 #ifdef HAVE_LIBSSL
 	if (cn->ssl_ctx_h)
@@ -275,6 +276,10 @@ void real_read_all(connection_t *cn)
 	else
 #endif
 		ret = read_socket(cn);
+	mylog(LOG_DEBUG, "state: %d", cn->connected);
+	if (!cn_is_connected(cn)) {
+		return;
+	}
 
 	if (!cn->incoming_lines)
 		cn->incoming_lines = list_new(NULL);
@@ -301,7 +306,7 @@ static void connection_client_on_out(void *data)
 		int optlen = sizeof(optval);
 		int err = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval,
 				     &optlen);
-		mylog(LOG_DEBUG, "fd:%d Connection finished: %d !", cn->handle,
+		mylog(LOG_DEBUG, "fd:%d Connected SO_ERROR: %d !", cn->handle,
 		      optval);
 		if (optval != 0) {
 			connection_close(cn);
@@ -315,6 +320,7 @@ static void connection_client_on_out(void *data)
 		if (!cn->ssl_ctx_h) {
 			cn->connected = CONN_OK;
 			descriptor_unset_events(descriptor, POLLER_OUT);
+			descriptor_set_events(descriptor, POLLER_IN);
 			return;
 		}
 		cn->connected = CONN_SSL_CONNECT;
@@ -764,9 +770,9 @@ static int read_socket_SSL(connection_t *cn)
 		connection_close(cn);
 		return READ_ERROR;
 	} else if (count == 0) {
-			mylog(LOG_ERROR, "fd %d: Connection lost",
-					cn->handle);
-			connection_close(cn);
+		mylog(LOG_ERROR, "fd %d: Connection lost",
+				cn->handle);
+		connection_close(cn);
 		return READ_ERROR;
 	}
 
@@ -826,6 +832,7 @@ static void data_find_lines(connection_t *cn)
 			buf[ssz] = 0;
 
 			list_add_last(cn->incoming_lines, buf);
+			mylog(LOG_DEBUG, "line: %s", buf);
 		}
 
 		len++;
@@ -899,6 +906,10 @@ static void connection_save_endpoints(connection_t *c)
 		free(c->remoteip);
 	c->remoteip = connection_remoteip(c);
 	c->remoteport = connection_remoteport(c);
+	mylog(LOG_DEBUG, "fd:%d endpoints local: %s:%d remote:%s:%d",
+			c->handle,
+			c->localip, c->localport,
+			c->remoteip, c->remoteport);
 }
 
 

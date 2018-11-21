@@ -1982,6 +1982,8 @@ static struct link_client *irc_accept_new(listener_t *listener)
 	if (!newconn)
 		return NULL;
 
+	mylog(LOG_DEBUG, "New connection: %d", newconn->handle);
+
 	ircc = bip_calloc(sizeof(struct link_client), 1);
 	CONN(ircc) = newconn;
 	TYPE(ircc) = IRC_TYPE_LOGING_CLIENT;
@@ -2242,7 +2244,6 @@ void irc_server_shutdown(struct link_server *s)
 
 void oidentd_dump(bip_t *bip)
 {
-	mylog(LOG_ERROR, "%d %s", bip->write_oidentd, bip->oidentdpath);
 	if (!bip->write_oidentd || bip->oidentdpath == NULL) {
 		return;
 	}
@@ -2551,16 +2552,9 @@ void irc_main(bip_t *bip)
 		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
 			if (list_is_empty(conn->incoming_lines))
 				continue;
+			mylog(LOG_DEBUG, "bip_on_event: %d", conn->handle);
 			bip_on_event(bip, conn);
 		}
-
-		// keep old and new list of CONN_OK connections, and call this if they differ
-		list_t *ready;// = wait_event(&bip->conn_list, &timeleft);
-		//if (nc)
-		//	oidentd_dump(bip);
-		while ((conn = list_remove_first(ready)))
-			bip_on_event(bip, conn);
-		list_free(ready);
 	}
 	while (list_remove_first(&bip->connecting_client_list))
 		;
