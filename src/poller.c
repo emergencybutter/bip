@@ -52,6 +52,7 @@ descriptor_t *poller_register(poller_t *p, int fd)
 
 void poller_unregister(poller_t *p, int fd)
 {
+	mylog(LOG_DEBUG, "Unregister FD:%d ", fd);
 	INT_KEY(str, fd);
 	descriptor_t* descriptor = hash_get(&p->fds, str);
 	descriptor->removed = 1;
@@ -86,6 +87,8 @@ void poller_wait(poller_t *p, int timeout)
 		descriptor_t *descriptor = hash_it_item(&hi);
 		if (descriptor->removed) {
 			hash_it_remove(&hi);
+			free(descriptor);
+			continue;
 		}
 		if (descriptor->events != 0) {
 			num_fds++;

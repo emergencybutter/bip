@@ -39,6 +39,7 @@ START_TEST(test_connection_basic)
 	ck_assert_int_eq(receiving_end->connected, CONN_OK);
     connection_close(client);
 	connection_close(receiving_end);
+	poller_wait(global_poller(), msec);
 }
 END_TEST
 
@@ -85,6 +86,7 @@ START_TEST(test_connection_ssl)
 	ck_assert_int_eq(receiving_end->connected, CONN_OK);
 	connection_close(client);
 	connection_close(receiving_end);
+	poller_wait(global_poller(), msec);
 }
 END_TEST
 
