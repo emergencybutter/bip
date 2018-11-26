@@ -47,7 +47,6 @@ AC_CHECK_FUNC(backtrace_symbols_fd, [
         backtrace="(with backtrace)"
 ])
 
-
 PKG_CHECK_MODULES([CHECK], [check >= 0.9.6], [
 		   AC_CONFIG_FILES([tests/Makefile])
 		   enable_tests=yes

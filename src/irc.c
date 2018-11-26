@@ -25,7 +25,6 @@
 #define S_CONN_DELAY (10)
 
 extern int sighup;
-extern bip_t *_bip;
 
 static int irc_join(struct link_server *server, struct line *line);
 static int irc_part(struct link_server *server, struct line *line);
@@ -1933,7 +1932,7 @@ static void irc_server_startup(struct link_server *ircs)
 	char *username, *realname;
 
 	/* lower the token number as freenode hates fast login */
-        CONN(ircs)->token = 1;
+	CONN(ircs)->token = 1;
 
 	if (LINK(ircs)->s_password)
 		WRITE_LINE1(CONN(ircs), NULL, "PASS", LINK(ircs)->s_password);
@@ -1964,6 +1963,12 @@ static void irc_server_startup(struct link_server *ircs)
 
 	ls_set_nick(ircs, nick);
 	WRITE_LINE1(CONN(ircs), NULL, "NICK", ircs->nick);
+
+	mylog(LOG_DEBUG, "Startup: %d", CONN(ircs)->handle);
+	{
+		descriptor_t* d = poller_get_descriptor(global_poller(), CONN(ircs)->handle);
+		mylog(LOG_DEBUG, "descriptor: %p: %d, %x", d, CONN(ircs)->handle, d->events);
+	}
 }
 
 static void server_next(struct link *l)
@@ -2157,7 +2162,7 @@ void irc_server_free(struct link_server *s)
 	free(s);
 }
 
-connection_t *irc_server_connect(struct link *link)
+connection_t *irc_server_connect(bip_t* bip, struct link *link)
 {
 	struct link_server *ls;
 	connection_t *conn;
@@ -2196,9 +2201,8 @@ connection_t *irc_server_connect(struct link *link)
 	ls = irc_server_new(link, conn);
 	conn->user_data = ls;
 
-	list_add_last(&_bip->conn_list, conn);
-	oidentd_dump(_bip);
-	irc_server_startup(ls);
+	list_add_last(&bip->conn_list, conn);
+	oidentd_dump(bip);
 	return conn;
 }
 
@@ -2362,6 +2366,7 @@ void timeout_clean_who_counts(list_t *conns)
 		struct link_client *client = l->who_client;
 
 		if (client && client->whoc_tstamp) {
+			mylog(LOG_DEBUG, "timeout_clean_who_counts: %p %p", l, client);
 			time_t now;
 			now = time(NULL);
 			if (now - client->whoc_tstamp > 10) {
@@ -2391,6 +2396,7 @@ void bip_init(bip_t *bip)
 /* Called each second. */
 void bip_tick(bip_t *bip)
 {
+	mylog(LOG_DEBUG, "bip_tick");
 	static int logflush_timer = 0;
 	struct link *link;
 	list_iterator_t li;
@@ -2401,10 +2407,13 @@ void bip_tick(bip_t *bip)
 		log_flush_all();
 	}
 
+	mylog(LOG_DEBUG, "bip_tick2");
+
 	/* handle tick for links: detect lags or start a reconnection */
 	for (list_it_init(&bip->link_list, &li); (link = list_it_item(&li));
 			list_it_next(&li)) {
 		if (link->l_server) {
+			mylog(LOG_DEBUG, "bip server");
 			if (irc_server_lag_compute(link)) {
 				log_ping_timeout(link->log);
 				list_remove(&bip->conn_list,
@@ -2412,10 +2421,12 @@ void bip_tick(bip_t *bip)
 				irc_close((struct link_any *) link->l_server);
 			}
 		} else {
+			mylog(LOG_DEBUG, "client %d", link->recon_timer);
 			if (link->recon_timer == 0) {
 				connection_t *conn;
 				link->last_connection_attempt = time(NULL);
-				conn = irc_server_connect(link);
+				conn = irc_server_connect(bip, link);
+				mylog(LOG_DEBUG, "connecting? %p", conn);
 				if (!conn)
 					server_setup_reconnect_timer(link);
 			} else {
@@ -2424,10 +2435,13 @@ void bip_tick(bip_t *bip)
 		}
 	}
 
+	mylog(LOG_DEBUG, "lagging");
+
 	/* drop lagging connecting client */
 	for (list_it_init(&bip->connecting_client_list, &li); list_it_item(&li);
 			list_it_next(&li)) {
 		struct link_client *ic = list_it_item(&li);
+		mylog(LOG_DEBUG, "ic: %p", ic);
 		ic->logging_timer++;
 		if (ic->logging_timer > LOGGING_TIMEOUT) {
 			if (CONN(ic))
@@ -2437,6 +2451,7 @@ void bip_tick(bip_t *bip)
 		}
 	}
 
+	mylog(LOG_DEBUG, "clean");
 	/*
 	 * Cleanup lagging or dangling who_count buffers
 	 */
@@ -2523,7 +2538,7 @@ prot_err:
 
 void irc_main(bip_t *bip)
 {
-	int timeleft = 1000;
+	int timeleft = 0;
 
 	if (bip->reloading_client) {
 		char *l;
@@ -2542,14 +2557,35 @@ void irc_main(bip_t *bip)
 			timeleft = 1000;
 			bip_tick(bip);
 		}
-
+		mylog(LOG_DEBUG, "Poller");
+		list_t not_ok_conns;
+		list_init(&not_ok_conns, list_ptr_cmp);
+		list_iterator_t it;
+		connection_t* conn;
+		// We will eventually want to add a "on_connected" callback. For now, simply track state changes.
+		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
+			if (TYPE((struct link_any*)conn->user_data) == IRC_TYPE_SERVER && conn->connected != CONN_OK) {
+				list_add_first(&not_ok_conns, conn);
+			}
+		}
 		poller_wait(global_poller(), timeleft);
+		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
+			if (TYPE((struct link_any*)conn->user_data) == IRC_TYPE_SERVER && conn->connected == CONN_OK
+					&& list_get(&not_ok_conns, conn)) {
+				list_remove(&not_ok_conns, conn);
+				mylog(LOG_DEBUG, "Startup");
+				irc_server_startup(conn->user_data);
+			}
+		}
+		while (!list_is_empty(&not_ok_conns)) {
+			list_remove_first(&not_ok_conns);
+		}
+
 		if (list_is_empty(&bip->listener->accepted_connections)) {
 			bip_on_listener_event(bip, bip->listener);
 		}
-		list_iterator_t it;
-		connection_t* conn;
 		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
+			assert(conn->incoming_lines);
 			if (list_is_empty(conn->incoming_lines))
 				continue;
 			mylog(LOG_DEBUG, "bip_on_event: %d", conn->handle);

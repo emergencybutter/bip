@@ -362,6 +362,26 @@ static void connection_client_on_hup(void *data)
 	connection_close(data);
 }
 
+static char* bip_ntop(struct sockaddr* addr, int*port) {
+	char* ip = bip_malloc(128);
+	ip[127] = 0;
+	switch (addr->sa_family) {
+	case AF_INET:
+		inet_ntop(AF_INET, &((struct sockaddr_in*)addr)->sin_addr, ip, 127);
+		*port = ntohs(((struct sockaddr_in*)addr)->sin_port);
+		break;
+	case AF_INET6:
+		inet_ntop(AF_INET6, &((struct sockaddr_in6*)addr)->sin6_addr, ip, 127);
+		*port = ntohs(((struct sockaddr_in6*)addr)->sin6_port);
+		break;
+	default:
+		strcpy(ip, "unknown family");
+		*port = 0;
+		break;
+	}
+	return ip;
+}
+
 static void connect_trynext(connection_t *cn)
 {
 	struct addrinfo *cur;
@@ -373,7 +393,7 @@ static void connect_trynext(connection_t *cn)
 
 	cur = cn->connecting_data->cur;
 
-	mylog(LOG_DEBUG, "trynext: %d", cn->handle);
+	mylog(LOG_DEBUG, "connect_trynext current fd: %d", cn->handle);
 
 	for (cur = cn->connecting_data->cur ; cur ; cur = cur->ai_next) {
 		if ((cn->handle = socket(cur->ai_family, cur->ai_socktype,
@@ -381,6 +401,8 @@ static void connect_trynext(connection_t *cn)
 			mylog(LOG_WARN, "socket() : %s", strerror(errno));
 			continue;
 		}
+		mylog(LOG_DEBUG, "connect_trynext new fd: %d", cn->handle);
+
 		descriptor_t* descriptor = poller_register(global_poller(), cn->handle);
 		descriptor->on_in = connection_client_on_in;
 		descriptor->on_out = connection_client_on_out;
@@ -401,11 +423,18 @@ static void connect_trynext(connection_t *cn)
 		err = connect(cn->handle, cur->ai_addr, cur->ai_addrlen);
 		if (err == -1 && errno != EINPROGRESS) {
 			/* connect() failed */
-			char ip[256];
-			mylog(LOG_WARN, "connect(%s) : %s",
-				inet_ntop(cur->ai_family, cur->ai_addr, ip, 256),
+			int port = 0;
+			char* ip = bip_ntop(cur->ai_addr, &port);
+			mylog(LOG_WARN, "connect(%s:%d): %d",
+				ip, port,
 				strerror(errno));
+			free(ip);
 			connection_close(cn);
+		} else {
+			int port = 0;
+			char* ip = bip_ntop(cur->ai_addr, &port);
+			mylog(LOG_DEBUG, "connect(%s:%d)", ip, port);
+			free(ip);
 		}
 
 		// Regardless of if we got EINPROGRESS or SUCCESS, we simply
@@ -415,7 +444,7 @@ static void connect_trynext(connection_t *cn)
 		cn->connect_time = time(NULL);
 		cn->connected = CONN_INPROGRESS;
 		descriptor_set_events(descriptor, POLLER_OUT);
-		mylog(LOG_DEBUG, "POLLER_OUT: %d", cn->handle);
+		mylog(LOG_DEBUG, "POLLER_OUT: %d %d %x %p", cn->handle, descriptor->fd, descriptor->events, descriptor);
 		return;
 	}
 
@@ -652,7 +681,7 @@ static void real_write_all(connection_t *cn)
 static void maybe_trigger_read_event(connection_t *cn)
 {
 	if (cn->connected == CONN_SSL_NEED_RETRY_READ
-	    && cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
+	    || cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
 		return;
 	}
 	descriptor_t *descriptor =
@@ -663,19 +692,19 @@ static void maybe_trigger_read_event(connection_t *cn)
 static void maybe_trigger_write_event(connection_t *cn)
 {
 	if (cn->connected == CONN_SSL_NEED_RETRY_READ
-	    && cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
+	    || cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
 		return;
 	}
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
-	descriptor_unset_events(descriptor, POLLER_OUT);
-	if (cn->partial == NULL) {
-		return;
+	if (cn->partial != NULL || connection_want_write(cn)) {
+			mylog(LOG_DEBUG, "trigger write out: %d", descriptor->fd);
+
+		descriptor_set_events(descriptor, POLLER_OUT);
+	} else {
+		descriptor_unset_events(descriptor, POLLER_OUT);
+		mylog(LOG_DEBUG, "trigger  no write out: %d", descriptor->fd);
 	}
-	if (!connection_want_write(cn)) {
-		return;
-	}
-	descriptor_set_events(descriptor, POLLER_OUT);
 }
 
 /*
@@ -952,6 +981,8 @@ static int connection_want_write(connection_t *cn)
 			 * antiflood */
 			cn->token = 1;
 
+		mylog(LOG_DEBUG, "tokens: %d empty: %d", cn->token, list_is_empty(cn->outgoing));
+
 		/* use a token if needed and available */
 		if (!list_is_empty(cn->outgoing) && cn->token > 0) {
 			cn->token--;
@@ -994,6 +1025,8 @@ static void create_socket(char *dsthostname, char *dstport, char *srchostname,
 	int err;
 	struct connecting_data *cdata;
 	struct addrinfo hint;
+
+	mylog(LOG_DEBUG, "create_socket %s %s src: %s %s", dsthostname, dstport, srchostname, srcport);
 
 	memset(&hint, 0, sizeof(hint));
 	hint.ai_flags = AI_PASSIVE;
@@ -1123,7 +1156,7 @@ static connection_t *connection_init(int anti_flood, int timeout,
 	conn->incoming = incoming;
 	conn->incoming_end = 0;
 	conn->outgoing = outgoing;
-	conn->incoming_lines = NULL;
+	conn->incoming_lines = list_new(list_ptr_cmp);
 	conn->user_data = NULL;
 	conn->listening = listen;
 	conn->handle = -1;
@@ -1626,152 +1659,67 @@ static int socket_set_nonblock(int s)
 	return 1;
 }
 
-int connection_localport(connection_t *cn)
-{
-	struct sockaddr_in addr;
-	int err;
-	socklen_t addrlen;
-
-	if (cn->handle <= 0)
-		return -1;
-
-	addrlen = sizeof(addr);
-	err = getsockname(cn->handle, (struct sockaddr *)&addr, &addrlen);
-	if (err != 0) {
-		mylog(LOG_ERROR, "in getsockname(%d): %s", cn->handle,
-				strerror(errno));
-		return -1;
-	}
-
-	return ntohs(addr.sin_port);
-}
-
-int connection_remoteport(connection_t *cn)
-{
-	struct sockaddr_in addr;
-	int err;
-	socklen_t addrlen;
-
-	if (cn->handle <= 0)
-		return -1;
-
-	addrlen = sizeof(addr);
-	err = getpeername(cn->handle, (struct sockaddr *)&addr, &addrlen);
-	if (err != 0) {
-		mylog(LOG_ERROR, "in getpeername(%d): %s", cn->handle,
-				strerror(errno));
-		return -1;
-	}
-
-	return ntohs(addr.sin_port);
-}
-
-static char *socket_ip(int fd, int remote)
+static char *socket_ip(int fd, int remote, int *port)
 {
 	struct sockaddr addr;
-	struct sockaddr_in addr4;
-	struct sockaddr_in6 addr6;
 	socklen_t addrlen;
-	socklen_t addrlen4;
-	socklen_t addrlen6;
 	int err;
-	char *ip;
-	const char *ret;
 
+	*port = 0;
 	if (fd <= 0)
 		return NULL;
 
 	addrlen = sizeof(addr);
 
-	/* getsockname every time to get IP version */
-	err = getsockname(fd, (struct sockaddr *)&addr, &addrlen);
-	if (err != 0) {
-		mylog(LOG_ERROR, "in getsockname(%d): %s", fd,
-				strerror(errno));
-		return NULL;
-	}
-
-	ip = bip_malloc(65);
-
-	switch (addr.sa_family) {
-	case AF_INET:
-		addrlen4 = sizeof(addr4);
-
-		if (remote) {
-			err = getpeername(fd, (struct sockaddr *)&addr4,
-					&addrlen4);
-			if (err != 0) {
-				mylog(LOG_ERROR, "in getpeername(%d): %s", fd,
-						strerror(errno));
-				free(ip);
-				return NULL;
-			}
-		} else {
-			err = getsockname(fd, (struct sockaddr *)&addr4,
-					&addrlen4);
-			if (err != 0) {
-				mylog(LOG_ERROR, "in getsockname(%d): %s", fd,
-						strerror(errno));
-				free(ip);
-				return NULL;
-			}
-		}
-		ret = inet_ntop(AF_INET, &(addr4.sin_addr.s_addr), ip, 64);
-		if (ret == NULL) {
-			mylog(LOG_ERROR, "in inet_ntop: %s", strerror(errno));
-			free(ip);
+	if (!remote) {
+		/* getsockname every time to get IP version */
+		err = getsockname(fd, (struct sockaddr *)&addr, &addrlen);
+		if (err != 0) {
+			mylog(LOG_ERROR, "in getsockname(%d): %s", fd,
+			      strerror(errno));
 			return NULL;
 		}
-		break;
-	case AF_INET6:
-		addrlen6 = sizeof(addr6);
-
-		if (remote) {
-			err = getpeername(fd, (struct sockaddr *)&addr6,
-					&addrlen6);
-			if (err != 0) {
-				mylog(LOG_ERROR, "in getpeername(%d): %s", fd,
-						strerror(errno));
-				free(ip);
-				return NULL;
-			}
-		} else {
-			err = getsockname(fd, (struct sockaddr *)&addr6,
-					&addrlen6);
-			if (err != 0) {
-				mylog(LOG_ERROR, "in getsockname(%d): %s", fd,
-						strerror(errno));
-				free(ip);
-				return NULL;
-			}
-		}
-		ret = inet_ntop(AF_INET6, &(addr6.sin6_addr), ip, 64);
-		if (ret == NULL) {
-			mylog(LOG_ERROR, "in inet_ntop: %s", strerror(errno));
-			free(ip);
+	} else {
+		err = getpeername(fd, &addr, &addrlen);
+		if (err != 0) {
+			mylog(LOG_ERROR, "in getsockname(%d): %s", fd,
+			      strerror(errno));
 			return NULL;
 		}
-		break;
-	default:
-		mylog(LOG_ERROR, "Unknown socket family, that's bad.");
-		free(ip);
-		return NULL;
 	}
-	return ip;
+	return bip_ntop(&addr, port);
 }
 
 char *connection_localip(connection_t *cn)
 {
 	if (cn->handle <= 0)
 		return NULL;
-
-	return socket_ip(cn->handle, 0);
+	int port = 0;
+	return socket_ip(cn->handle, 0, &port);
 }
 
 char *connection_remoteip(connection_t *cn)
 {
 	if (cn->handle <= 0)
 		return NULL;
+	int port = 0;
+	return socket_ip(cn->handle, 1, &port);
+}
 
-	return socket_ip(cn->handle, 1);
+int connection_localport(connection_t *cn)
+{
+	if (cn->handle <= 0)
+		return -1;
+	int port = 0;
+	free(socket_ip(cn->handle, 1, &port));
+	return port;
+}
+
+int connection_remoteport(connection_t *cn)
+{
+	if (cn->handle <= 0)
+		return -1;
+	int port = 0;
+	free(socket_ip(cn->handle, 0, &port));
+	return port;
 }
