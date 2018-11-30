@@ -128,9 +128,9 @@ int list_is_empty(list_t *l);
 static inline void list_it_next(list_iterator_t *ti)
 {
 	assert(ti);
-	if (ti->cur) {
+	if (ti->cur != NULL) {
 		if (ti->next)
-			fatal("list_it_next: inconsistent interator state");
+			fatal("list_it_next: inconsistent iterator state");
 		ti->cur = ti->cur->next;
 	} else if (ti->next) {
 		ti->cur = ti->next;

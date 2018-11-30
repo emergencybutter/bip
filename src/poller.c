@@ -105,7 +105,6 @@ void poller_wait(poller_t *p, int timeout)
 			poller_unregister_finalize_iterator(&hi, descriptor);
 			continue;
 		}
-		mylog(LOG_DEBUG, "polling? %d %x", descriptor->fd, descriptor->events);
 		if (descriptor->events != 0) {
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
@@ -116,7 +115,6 @@ void poller_wait(poller_t *p, int timeout)
 			}
 			fds[num_fds - 1].fd = descriptor->fd;
 			fds[num_fds - 1].events = descriptor->events;
-			mylog(LOG_DEBUG, "polling: %d %x", descriptor->fd, descriptor->events);
 		}
 	}
 	int poll_ret = poll(fds, num_fds, timeout);
@@ -127,13 +125,10 @@ void poller_wait(poller_t *p, int timeout)
 	int num_removed_fds = 0;
 	for (int i = 0; i < num_fds; i++) {
 		descriptor_t* descriptor = poller_get_descriptor(p, fds[i].fd);
-		mylog(LOG_DEBUG, "event: %d %d %x in:%x out:%x", descriptor->fd, fds[i].fd, fds[i].events, POLLIN, POLLOUT);
 		if (fds[i].revents & POLLIN)
 			descriptor->on_in(descriptor->data);
-		if (!descriptor->removed && fds[i].revents & POLLOUT) {
-			mylog(LOG_DEBUG, "on_out");
+		if (!descriptor->removed && fds[i].revents & POLLOUT)
 			descriptor->on_out(descriptor->data);
-		}
 		if (!descriptor->removed && fds[i].revents & POLLHUP)
 			descriptor->on_hup(descriptor->data);
 		if (descriptor->removed) {

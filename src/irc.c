@@ -1239,7 +1239,6 @@ static int irc_dispatch_loging_client(bip_t *bip, struct link_client *ic,
 {
 	if (irc_line_count(line) == 0)
 		return ERR_PROTOCOL;
-
 	if (irc_line_elem_equals(line, 0, "NICK")) {
 		return irc_cli_nick(bip, ic, line);
 	} else if (irc_line_elem_equals(line, 0, "USER")) {
@@ -2491,7 +2490,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 	char *line_s;
 	while ((line_s = list_remove_first(linel))) {
 		struct line *line;
-		mylog(LOG_DEBUG, "\"%s\"", line_s);
+		mylog(LOG_DEBUG, "line: \"%s\"", line_s);
 		if (*line_s == 0) { /* irssi does that.*/
 			free(line_s);
 			continue;
@@ -2557,7 +2556,6 @@ void irc_main(bip_t *bip)
 			timeleft = 1000;
 			bip_tick(bip);
 		}
-		mylog(LOG_DEBUG, "Poller");
 		list_t not_ok_conns;
 		list_init(&not_ok_conns, list_ptr_cmp);
 		list_iterator_t it;
@@ -2573,7 +2571,6 @@ void irc_main(bip_t *bip)
 			if (TYPE((struct link_any*)conn->user_data) == IRC_TYPE_SERVER && conn->connected == CONN_OK
 					&& list_get(&not_ok_conns, conn)) {
 				list_remove(&not_ok_conns, conn);
-				mylog(LOG_DEBUG, "Startup");
 				irc_server_startup(conn->user_data);
 			}
 		}
@@ -2581,16 +2578,27 @@ void irc_main(bip_t *bip)
 			list_remove_first(&not_ok_conns);
 		}
 
-		if (list_is_empty(&bip->listener->accepted_connections)) {
+		if (!list_is_empty(&bip->listener->accepted_connections)) {
 			bip_on_listener_event(bip, bip->listener);
 		}
-		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
+		// Instead of letting bip_on_event touch bip internal lists, we can
+		// simply have it export a list of connections that we wan to close.
+		// This would allow us to not have to deal with that intermediate list.
+		list_t connections_with_lines;
+		list_init(&connections_with_lines, list_ptr_cmp);
+		for (list_it_init(&bip->conn_list, &it);
+		     conn = list_it_item(&it); list_it_next(&it)) {
 			assert(conn->incoming_lines);
 			if (list_is_empty(conn->incoming_lines))
 				continue;
-			mylog(LOG_DEBUG, "bip_on_event: %d", conn->handle);
+			list_add_last(&connections_with_lines, conn);
+		}
+		for (list_it_init(&connections_with_lines, &it);
+		    	conn = list_it_item(&it); list_it_next(&it)) {
 			bip_on_event(bip, conn);
 		}
+		while(list_remove_first(&connections_with_lines))
+			;
 	}
 	while (list_remove_first(&bip->connecting_client_list))
 		;

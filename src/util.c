@@ -380,6 +380,7 @@ void *list_remove_if_exists(list_t *list, const void *ptr)
 			if (debug == 1)
 				fatal("%x appears twice in list\n", ptr);
 			ret = list_it_remove(&li);
+			assert(li.cur == NULL);
 			debug = 1;
 		}
 	}

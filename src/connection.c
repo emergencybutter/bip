@@ -225,6 +225,7 @@ static void listener_on_in(void *data)
 	listener_t *listener = data;
 	mylog(LOG_DEBUG, "listener_on_in: %d", listener->handle);
 	connection_t *connection = accept_new(listener);
+	assert(connection != NULL);
 	list_add_last(&listener->accepted_connections, connection);
 	connection->user_data = listener->user_data;
 }
@@ -282,7 +283,7 @@ void real_read_all(connection_t *cn)
 	}
 
 	if (!cn->incoming_lines)
-		cn->incoming_lines = list_new(NULL);
+		cn->incoming_lines = list_new(list_ptr_cmp);
 	data_find_lines(cn);
 	maybe_trigger_read_event(cn);
 }
@@ -752,7 +753,7 @@ list_t *read_lines(connection_t *cn, int *error)
 	case CONN_OK:
 		*error = 0;
 		ret = cn->incoming_lines;
-		cn->incoming_lines = NULL;
+		cn->incoming_lines = list_new(list_ptr_cmp);
 		break;
 	default:
 		fatal("internal error 8");
@@ -1262,6 +1263,7 @@ listener_t *listener_new(char *hostname, int port,
 {
 	listener_t *listener = bip_malloc(sizeof(listener_t));
 	list_init(&listener->accepted_connections, list_ptr_cmp);
+	listener->anti_flood = 0;
 	listener->localip = strdup(hostname);
 	listener->localport = port;
 

@@ -1,3 +1,10 @@
+if DEBUG
+AM_CFLAGS = -g3 -O0
+else
+AM_CFLAGS = -O2
+endif
+
+
 TESTS = check_poller check_line check_connection check_irc
 check_PROGRAMS = check_poller check_line check_connection check_irc
 
