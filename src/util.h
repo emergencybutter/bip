@@ -105,6 +105,13 @@ typedef struct array {
 			      __LINE__);                                       \
 	} while (0)
 
+#define LINE_STR_HELPER(line) #line
+#define LINE_STR(x) LINE_STR_HELPER(x)
+#define log(level, format_string, ...)                                   \
+	do {                                                                 \
+		mylog(level, __FILE__ ":" LINE_STR(__LINE__) " " format_string, __VA_ARGS__);  \
+	} while (0)
+
 void list_init(list_t *list, int (*cmp)(const void *, const void *));
 int list_ptr_cmp(const void *a, const void *b);
 list_t *list_new(int (*cmp)(const void *, const void *));
@@ -145,7 +152,6 @@ static inline void *list_it_item(list_iterator_t *ti)
 		return NULL;
 	return ti->cur->ptr;
 }
-
 
 void hash_init(hash_t *h, int);
 void hash_free(hash_t *h);
@@ -192,6 +198,7 @@ array_t *array_extract(array_t *a, int index, int upto);
 void array_deinit(array_t *a);
 void array_free(array_t *a);
 void *array_drop(array_t *a, int index);
+
 static inline int array_count(array_t *a)
 {
 	assert(a);

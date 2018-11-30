@@ -152,13 +152,13 @@ void *irc_server(void *unused)
 	while (expected = server_pop_expected_line()) {
 		if (expected[0] == 'S') {
 			if (expected[1] == 'R') {
-				mylog(LOG_DEBUG, "Receiving %s", expected + 3);
+				log(LOG_DEBUG, "Receiving %s", expected + 3);
 				char *line = read_line(server_fd);
-				mylog(LOG_DEBUG, "read (server): %s", line);
+				log(LOG_DEBUG, "read (server): %s", line);
 				ck_assert_str_eq(line, expected + 3);
 				free(line);
 			} else if (expected[1] == 'S') {
-				mylog(LOG_DEBUG, "Sending %s", expected + 3);
+				log(LOG_DEBUG, "Sending %s", expected + 3);
 				size_t size = strlen(expected + 3);
 				ck_assert_int_eq(
 					write(server_fd, expected + 3, size),
@@ -166,13 +166,13 @@ void *irc_server(void *unused)
 			}
 		} else if (expected[0] == 'C') {
 			if (expected[1] == 'R') {
-				mylog(LOG_DEBUG, "Expecting (client-side) %s",
+				log(LOG_DEBUG, "Expecting (client-side) %s",
 				      expected + 3);
 				char *line = read_line(client_fd);
 				ck_assert_str_eq(line, expected + 3);
 				free(line);
 			} else if (expected[1] == 'S') {
-				mylog(LOG_DEBUG, "Client Sending %s",
+				log(LOG_DEBUG, "Client Sending %s",
 				      expected + 3);
 				size_t size = strlen(expected + 3);
 				ck_assert_int_eq(
