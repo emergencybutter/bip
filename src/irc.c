@@ -335,7 +335,6 @@ static int irc_315(struct link_server *server, struct line *l)
 void rotate_who_client(struct link *link)
 {
 	int i;
-	mylog(LOG_DEBUG, "rotate_who_client %p", link->who_client);
 	/* find a client with non-null who_count */
 	link->who_client = NULL;
 	for (i = 0; i < link->l_clientc; i++) {
@@ -590,7 +589,7 @@ void unbind_from_link(struct link_client *ic)
 	assert(i != l->l_clientc);
 
 	if (l->who_client == ic) {
-		mylog(LOG_DEBUG, "unbind_from_link:  %p: %d", l->who_client,
+		mylog(LOG_DEBUGVERB, "unbind_from_link:  %p: %d", l->who_client,
 				ic->who_count);
 		l->who_client = NULL;
 	}
@@ -2395,7 +2394,6 @@ void bip_init(bip_t *bip)
 /* Called each second. */
 void bip_tick(bip_t *bip)
 {
-	mylog(LOG_DEBUG, "bip_tick");
 	static int logflush_timer = 0;
 	struct link *link;
 	list_iterator_t li;
@@ -2406,13 +2404,10 @@ void bip_tick(bip_t *bip)
 		log_flush_all();
 	}
 
-	mylog(LOG_DEBUG, "bip_tick2");
-
 	/* handle tick for links: detect lags or start a reconnection */
 	for (list_it_init(&bip->link_list, &li); (link = list_it_item(&li));
 			list_it_next(&li)) {
 		if (link->l_server) {
-			mylog(LOG_DEBUG, "bip server");
 			if (irc_server_lag_compute(link)) {
 				log_ping_timeout(link->log);
 				list_remove(&bip->conn_list,
@@ -2420,12 +2415,10 @@ void bip_tick(bip_t *bip)
 				irc_close((struct link_any *) link->l_server);
 			}
 		} else {
-			mylog(LOG_DEBUG, "client %d", link->recon_timer);
 			if (link->recon_timer == 0) {
 				connection_t *conn;
 				link->last_connection_attempt = time(NULL);
 				conn = irc_server_connect(bip, link);
-				mylog(LOG_DEBUG, "connecting? %p", conn);
 				if (!conn)
 					server_setup_reconnect_timer(link);
 			} else {
@@ -2434,13 +2427,10 @@ void bip_tick(bip_t *bip)
 		}
 	}
 
-	mylog(LOG_DEBUG, "lagging");
-
 	/* drop lagging connecting client */
 	for (list_it_init(&bip->connecting_client_list, &li); list_it_item(&li);
 			list_it_next(&li)) {
 		struct link_client *ic = list_it_item(&li);
-		mylog(LOG_DEBUG, "ic: %p", ic);
 		ic->logging_timer++;
 		if (ic->logging_timer > LOGGING_TIMEOUT) {
 			if (CONN(ic))
@@ -2450,7 +2440,6 @@ void bip_tick(bip_t *bip)
 		}
 	}
 
-	mylog(LOG_DEBUG, "clean");
 	/*
 	 * Cleanup lagging or dangling who_count buffers
 	 */
@@ -2490,7 +2479,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 	char *line_s;
 	while ((line_s = list_remove_first(linel))) {
 		struct line *line;
-		mylog(LOG_DEBUG, "line: \"%s\"", line_s);
+		log(LOG_DEBUGVERB, "line: \"%s\"", line_s);
 		if (*line_s == 0) { /* irssi does that.*/
 			free(line_s);
 			continue;
