@@ -157,7 +157,7 @@ void poller_one_shot(poller_t* poller) {
 				(now.tv_sec - poller->last_timeout.tv_sec)
 					* 1000
 				+ (now.tv_nsec - poller->last_timeout.tv_nsec)
-					  / 1000;
+					/ 1000000;
 			if (timeout_ms <= 0) {
 				poller->timed_out(poller->data);
 				timeout_ms = poller->timeout;

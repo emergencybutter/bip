@@ -131,6 +131,7 @@ void *list_it_remove(list_iterator_t *li);
 void list_free(list_t *t);
 void list_append(list_t *dest, list_t *src);
 int list_is_empty(list_t *l);
+void list_clean(list_t *l);
 
 static inline void list_it_next(list_iterator_t *ti)
 {

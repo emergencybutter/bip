@@ -463,6 +463,11 @@ void list_free(list_t *t)
 	free(t);
 }
 
+void list_clean(list_t *l) {
+	while(list_remove_first(l))
+		;
+}
+
 void list_append(list_t *dest, list_t *src)
 {
 	assert(dest && src);
