@@ -2546,15 +2546,10 @@ void irc_main(bip_t *bip)
 					* 1000
 				+ (now.tv_nsec - loop_start.tv_nsec)
 					/ 1000000;
-		mylog(LOG_DEBUG, "%d %d", timeleft, (now.tv_sec - loop_start.tv_sec)
-					* 1000
-				+ (now.tv_nsec - loop_start.tv_nsec)
-					/ 1000000);
 		if (timeleft < 0) {
 			/*
 			 * Compute timeouts for next reconnections and lagouts
 			 */
-
 			timeleft = 1000;
 			loop_start = now;
 			mylog(LOG_DEBUG, "tick");
@@ -2597,11 +2592,9 @@ void irc_main(bip_t *bip)
 				continue;
 			list_add_last(&connections_with_lines, conn);
 		}
-		for (list_it_init(&connections_with_lines, &it);
-		    	conn = list_it_item(&it); list_it_next(&it)) {
+		while (conn = list_remove_first(&connections_with_lines)) {
 			bip_on_event(bip, conn);
 		}
-		list_clean(&connections_with_lines);
 	}
 	list_clean(&bip->connecting_client_list);
 	return;

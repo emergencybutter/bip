@@ -144,13 +144,14 @@ static void connection_client_ssl_connect(connection_t *cn)
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
 	int err;
+	mylog(LOG_ERROR, "client: %d", cn->ssl_client);
 	if (cn->ssl_client) {
 		err = SSL_connect(cn->ssl_h);
 	} else {
 		err = SSL_accept(cn->ssl_h);
 	}
-
-	switch (SSL_get_error(cn->ssl_h, err)) {
+	int ssl_err = 0;
+	switch (ssl_err = SSL_get_error(cn->ssl_h, err)) {
 	case SSL_ERROR_WANT_READ:
 		descriptor_set_events(descriptor, POLLER_IN);
 		descriptor_unset_events(descriptor, POLLER_OUT);
@@ -177,13 +178,13 @@ static void connection_client_ssl_connect(connection_t *cn)
 		if (len > 0)
 			buf[len - 1] = '\0';
 		mylog(LOG_DEBUG, "Negociated ciphers: %s", buf);
+		mylog(LOG_DEBUG, "ssl_check_mode: %d", cn->ssl_check_mode);
 
 		switch (cn->ssl_check_mode) {
 		case SSL_CHECK_NONE:
 			cn->connected = CONN_OK;
 			descriptor_set_events(descriptor, POLLER_IN);
 			descriptor_unset_events(descriptor, POLLER_OUT);
-
 			return;
 		case SSL_CHECK_BASIC:
 			if ((err = SSL_get_verify_result(cn->ssl_h))
@@ -194,9 +195,11 @@ static void connection_client_ssl_connect(connection_t *cn)
 				cn->connected = CONN_UNTRUSTED;
 				descriptor_set_events(descriptor, POLLER_IN);
 				descriptor_unset_events(descriptor, POLLER_OUT);
-
 				return;
 			}
+			cn->connected = CONN_OK;
+			descriptor_set_events(descriptor, POLLER_IN);
+			descriptor_unset_events(descriptor, POLLER_OUT);
 			break;
 		case SSL_CHECK_CA:
 			if ((err = SSL_get_verify_result(cn->ssl_h))
@@ -207,16 +210,23 @@ static void connection_client_ssl_connect(connection_t *cn)
 				cn->connected = CONN_UNTRUSTED;
 				descriptor_set_events(descriptor, POLLER_IN);
 				descriptor_unset_events(descriptor, POLLER_OUT);
-
 				return;
 			}
+			mylog(LOG_ERROR, "connok");
+			cn->connected = CONN_OK;
+			descriptor_set_events(descriptor, POLLER_IN);
+			descriptor_unset_events(descriptor, POLLER_OUT);
 			break;
 		default:
 			fatal("Unknown ssl_check_mode");
 		}
-	}
-	default:
-		fatal("Unknown SSL Error");
+	} break;
+	default: {
+		char buf[256];
+		ERR_error_string_n(ssl_err, buf, 255);
+		buf[255] = 0;
+		fatal("Unknown SSL Error: %d, %d, %s", err, ssl_err, buf);
+	} break;
 	}
 }
 
