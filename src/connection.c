@@ -1249,7 +1249,7 @@ connection_t *accept_new(listener_t *listener)
 	socket_set_nonblock(handle);
 
 	// TODO: enable anti_flood
-	conn = connection_init(/*listener->anti_flood*/0, listener->timeout, /*listen=*/1);
+	conn = connection_init(listener->anti_flood, listener->timeout, /*listen=*/1);
 	conn->connect_time = time(NULL);
 	conn->user_data = listener->user_data;
 	conn->handle = handle;
@@ -1322,7 +1322,7 @@ static connection_t *_connection_new(char *dsthostname, char *dstport,
 	connection_t *conn;
 
 	// TODO: enable anti_flood
-	conn = connection_init(/*anti_flood=*/0, timeout, /*listen=*/0);
+	conn = connection_init(/*anti_flood=*/1, timeout, /*listen=*/0);
 	create_socket(dsthostname, dstport, srchostname, srcport, conn);
 
 	return conn;
@@ -1513,7 +1513,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 	connection_t *conn;
 
 	// TODO: enable anti_flood
-	conn = connection_init(/*anti_flood=*/0, timeout, /*listen=*/0);
+	conn = connection_init(/*anti_flood=*/1, timeout, /*listen=*/0);
 	if (!(conn->ssl_ctx_h = connection_create_ssl_context(ssl_options->ssl_ciphers))) {
 		mylog(LOG_ERROR, "SSL context initialization failed");
 		return conn;
