@@ -156,7 +156,6 @@ char *link_name(struct link_any *l)
 static int irc_001(struct link_server *server, struct line *line)
 {
 	(void)line;
-
 	if (LINK(server)->s_state == IRCS_WAS_CONNECTED)
 		LINK(server)->s_state = IRCS_RECONNECTING;
 	else
@@ -305,7 +304,6 @@ static int irc_352(struct link_server *server, struct line *line)
 		if (!nick)
 			return OK_COPY_WHO;
 	}
-
 #endif
 	return OK_COPY_WHO;
 }
@@ -357,6 +355,8 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 	int ret = OK_COPY;
 	/* shut gcc up */
 	(void)bip;
+
+	log(LOG_DEBUG, "irc_dispatch_server %s", irc_line_elem(line, 0));
 
 	if (!irc_line_includes(line, 0))
 		return ERR_PROTOCOL;
@@ -415,11 +415,11 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 		if (irc_line_elem_equals(line, 0, "376")) /* end of motd */
 			irc_server_connected(server);
 		else if (irc_line_elem_equals(line, 0, "422")) /* no motd */
-				irc_server_connected(server);
+			irc_server_connected(server);
 
 	} else if (LINK(server)->s_state == IRCS_CONNECTING) {
 		ret = OK_FORGET;
-			if (irc_line_elem_equals(line, 0, "005")) {
+		if (irc_line_elem_equals(line, 0, "005")) {
 			int i;
 			for (i = irc_line_count(line) - 1; i > 0; i--) {
 				if (LINK(server)->ignore_server_capab &&
@@ -737,14 +737,17 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 		return ERR_AUTH;
 	}
 
+	log(LOG_DEBUG, "authing %s", ic->init_pass);
+
 	list_iterator_t it;
 	for (list_it_init(&bip->link_list, &it); list_it_item(&it);
 			list_it_next(&it)) {
 		struct link *l = list_it_item(&it);
+		log(LOG_DEBUG, "Found %s %s, %s %s", user,  l->user->name, connname, l->name);
 		if (strcmp(user, l->user->name) == 0 &&
 				strcmp(connname, l->name) == 0) {
-			if (chash_cmp(pass, l->user->password,
-						l->user->seed) == 0) {
+			if (chash_cmp(pass, l->user->password, l->user->seed)
+			    == 0) {
 				bind_to_link(l, ic);
 				break;
 			}
@@ -1961,12 +1964,6 @@ static void irc_server_startup(struct link_server *ircs)
 
 	ls_set_nick(ircs, nick);
 	WRITE_LINE1(CONN(ircs), NULL, "NICK", ircs->nick);
-
-	mylog(LOG_DEBUG, "Startup: %d", CONN(ircs)->handle);
-	{
-		descriptor_t* d = poller_get_descriptor(global_poller(), CONN(ircs)->handle);
-		mylog(LOG_DEBUG, "descriptor: %p: %d, %x", d, CONN(ircs)->handle, d->events);
-	}
 }
 
 static void server_next(struct link *l)
@@ -2451,7 +2448,7 @@ void bip_on_listener_event(bip_t *bip, listener_t *listener)
 	struct link_any *lc = (struct link_any *)listener->user_data;
 
 	struct link_client *n;
-	while (n = irc_accept_new(bip->listener)) {
+	while ((n = irc_accept_new(bip->listener))) {
 		list_add_last(&bip->conn_list, CONN(n));
 		list_add_last(&bip->connecting_client_list, n);
 	}
@@ -2479,7 +2476,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 	char *line_s;
 	while ((line_s = list_remove_first(linel))) {
 		struct line *line;
-		log(LOG_DEBUGVERB, "line: \"%s\"", line_s);
+		log(LOG_DEBUG, "line: \"%s\"", line_s);
 		if (*line_s == 0) { /* irssi does that.*/
 			free(line_s);
 			continue;
@@ -2524,6 +2521,56 @@ prot_err:
 	}
 }
 
+void irc_one_shot(bip_t *bip, int timeleft)
+{
+	list_t not_ok_conns;
+	list_init(&not_ok_conns, list_ptr_cmp);
+	list_iterator_t it;
+	connection_t *conn;
+	// We will eventually want to add a "on_connected" callback. For
+	// now, simply track state changes.
+	for (list_it_init(&bip->conn_list, &it); (conn = list_it_item(&it));
+	     list_it_next(&it)) {
+		if (TYPE((struct link_any *)conn->user_data) == IRC_TYPE_SERVER
+		    && conn->connected != CONN_OK) {
+			list_add_first(&not_ok_conns, conn);
+		}
+	}
+	poller_wait(global_poller(), timeleft);
+	for (list_it_init(&bip->conn_list, &it); (conn = list_it_item(&it));
+	     list_it_next(&it)) {
+		if (TYPE((struct link_any *)conn->user_data) == IRC_TYPE_SERVER
+		    && conn->connected == CONN_OK
+		    && list_get(&not_ok_conns, conn)) {
+			list_remove(&not_ok_conns, conn);
+			irc_server_startup(conn->user_data);
+		}
+	}
+	while (!list_is_empty(&not_ok_conns)) {
+		list_remove_first(&not_ok_conns);
+	}
+
+	if (!list_is_empty(&bip->listener->accepted_connections)) {
+		bip_on_listener_event(bip, bip->listener);
+	}
+	// Instead of letting bip_on_event touch bip internal lists, we
+	// can simply have it export a list of connections that we wan
+	// to close. This would allow us to not have to deal with that
+	// intermediate list.
+	list_t connections_with_lines;
+	list_init(&connections_with_lines, list_ptr_cmp);
+	for (list_it_init(&bip->conn_list, &it); (conn = list_it_item(&it));
+	     list_it_next(&it)) {
+		assert(conn->incoming_lines);
+		if (list_is_empty(conn->incoming_lines))
+			continue;
+		list_add_last(&connections_with_lines, conn);
+	}
+	while ((conn = list_remove_first(&connections_with_lines))) {
+		bip_on_event(bip, conn);
+	}
+}
+
 void irc_main(bip_t *bip)
 {
 	int timeleft = 0;
@@ -2541,63 +2588,19 @@ void irc_main(bip_t *bip)
 	while (!sighup) {
 		struct timespec now;
 		poller_gettime(&now);
-		timeleft -=
-				(now.tv_sec - loop_start.tv_sec)
-					* 1000
-				+ (now.tv_nsec - loop_start.tv_nsec)
-					/ 1000000;
+		timeleft -= (now.tv_sec - loop_start.tv_sec) * 1000
+			    + (now.tv_nsec - loop_start.tv_nsec) / 1000000;
 		if (timeleft < 0) {
 			/*
 			 * Compute timeouts for next reconnections and lagouts
 			 */
 			timeleft = 1000;
 			loop_start = now;
-			mylog(LOG_DEBUG, "tick");
 			bip_tick(bip);
 		}
-		list_t not_ok_conns;
-		list_init(&not_ok_conns, list_ptr_cmp);
-		list_iterator_t it;
-		connection_t* conn;
-		// We will eventually want to add a "on_connected" callback. For now, simply track state changes.
-		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
-			if (TYPE((struct link_any*)conn->user_data) == IRC_TYPE_SERVER && conn->connected != CONN_OK) {
-				list_add_first(&not_ok_conns, conn);
-			}
-		}
-		poller_wait(global_poller(), timeleft);
-		for (list_it_init(&bip->conn_list, &it); conn = list_it_item(&it); list_it_next(&it)) {
-			if (TYPE((struct link_any*)conn->user_data) == IRC_TYPE_SERVER && conn->connected == CONN_OK
-					&& list_get(&not_ok_conns, conn)) {
-				list_remove(&not_ok_conns, conn);
-				irc_server_startup(conn->user_data);
-			}
-		}
-		while (!list_is_empty(&not_ok_conns)) {
-			list_remove_first(&not_ok_conns);
-		}
-
-		if (!list_is_empty(&bip->listener->accepted_connections)) {
-			bip_on_listener_event(bip, bip->listener);
-		}
-		// Instead of letting bip_on_event touch bip internal lists, we can
-		// simply have it export a list of connections that we wan to close.
-		// This would allow us to not have to deal with that intermediate list.
-		list_t connections_with_lines;
-		list_init(&connections_with_lines, list_ptr_cmp);
-		for (list_it_init(&bip->conn_list, &it);
-		     conn = list_it_item(&it); list_it_next(&it)) {
-			assert(conn->incoming_lines);
-			if (list_is_empty(conn->incoming_lines))
-				continue;
-			list_add_last(&connections_with_lines, conn);
-		}
-		while (conn = list_remove_first(&connections_with_lines)) {
-			bip_on_event(bip, conn);
-		}
+		irc_one_shot(bip, timeleft);
 	}
 	list_clean(&bip->connecting_client_list);
-	return;
 }
 
 void irc_client_free(struct link_client *cli)

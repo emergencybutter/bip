@@ -259,6 +259,7 @@ struct link_client *irc_client_new(void);
 struct link_server *irc_server_new(struct link *link, connection_t *conn);
 void irc_server_free(struct link_server *is);
 struct client *client_new();
+void irc_one_shot(bip_t *bip, int timeleft);
 void irc_main(bip_t *);
 int ischannel(char p);
 void irc_client_close(struct link_client *);

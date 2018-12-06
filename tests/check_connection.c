@@ -46,6 +46,7 @@ START_TEST(test_connection_basic)
 }
 END_TEST
 
+#ifdef HAVE_LIBSSL
 START_TEST(test_connection_ssl)
 {
 	connection_ssl_initialize();
@@ -92,6 +93,7 @@ START_TEST(test_connection_ssl)
 	poller_wait(global_poller(), msec);
 }
 END_TEST
+#endif
 
 Suite *money_suite(void)
 {
@@ -103,7 +105,9 @@ Suite *money_suite(void)
 	tc_core = tcase_create("connection");
 
 	tcase_add_test(tc_core, test_connection_basic);
+#ifdef HAVE_LIBSSL
 	tcase_add_test(tc_core, test_connection_ssl);
+#endif
 	suite_add_tcase(s, tc_core);
 
 	return s;

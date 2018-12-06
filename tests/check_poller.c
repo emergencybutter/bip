@@ -5,6 +5,18 @@
 #include <stdio.h>
 #include <sys/errno.h>
 #include <fcntl.h>
+#include <signal.h>
+
+extern int sighup;
+extern FILE *conf_global_log_file;
+extern int conf_log_level;
+
+void init_test()
+{
+	conf_global_log_file = stderr;
+	conf_log_level = LOG_DEBUGTOOMUCH + 1;
+	signal(SIGPIPE, SIG_IGN);
+}
 
 void poller_pipe(int *filedes)
 {
@@ -29,9 +41,19 @@ void inc_pointee(void *p)
 	(*ip)++;
 }
 
-void should_not_call(void *_)
+void should_not_call_in(void *_)
 {
-	fatal("Called should_not_call\n");
+	ck_abort_msg("Called should_not_call_in");
+}
+
+void should_not_call_out(void *_)
+{
+	ck_abort_msg("Called should_not_call_out");
+}
+
+void should_not_call_hup(void *_)
+{
+	ck_abort_msg("Called should_not_call_hup");
 }
 
 START_TEST(test_poller_basic)
@@ -44,13 +66,13 @@ START_TEST(test_poller_basic)
 	descriptor_t *d1_write = poller_register(poller, f1[1]);
 	int an_integer = 0;
 	d1_read->on_in = &inc_pointee;
-	d1_read->on_out = &should_not_call;
-	d1_read->on_hup = &should_not_call;
+	d1_read->on_out = &should_not_call_out;
+	d1_read->on_hup = &should_not_call_hup;
 	d1_read->data = &an_integer;
 
-	d1_write->on_in = &should_not_call;
+	d1_write->on_in = &should_not_call_in;
 	d1_write->on_out = &inc_pointee;
-	d1_write->on_hup = &should_not_call;
+	d1_write->on_hup = &should_not_call_hup;
 	d1_write->data = &an_integer;
 
 	// Nothing to read.
@@ -80,10 +102,9 @@ START_TEST(test_poller_basic)
 	poller_wait(poller, 0);
 	ck_assert_int_eq(an_integer, 2);
 
-	// Add something back on the pipe, but listen for "out"
+	// Add something back on the pipe, but don't listen for "in"
 	n = write(f1[1], "a", 1);
 	ck_assert_int_eq(n, 1);
-	descriptor_set_events(d1_read, POLLER_OUT);
 	descriptor_unset_events(d1_read, POLLER_IN);
 	poller_wait(poller, 0);
 	ck_assert_int_eq(an_integer, 2);
@@ -123,7 +144,7 @@ START_TEST(test_poller_basic)
 	}
 	poller_unregister(poller, f1[1]);
 	poller_wait(poller, 0);
-	ck_assert_int_eq(an_integer, 4);
+	ck_assert(an_integer >= 4);
 }
 END_TEST
 
@@ -148,6 +169,8 @@ int main(void)
 	int number_failed;
 	Suite *s;
 	SRunner *sr;
+
+	init_test();
 
 	s = money_suite();
 	sr = srunner_create(s);

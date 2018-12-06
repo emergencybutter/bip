@@ -52,7 +52,7 @@ descriptor_t *poller_register(poller_t *p, int fd)
 
 void poller_unregister(poller_t *p, int fd)
 {
-	mylog(LOG_DEBUG, "Unregister FD:%d ", fd);
+	log(LOG_DEBUG, "Unregister FD:%d ", fd);
 	INT_KEY(str, fd);
 	descriptor_t* descriptor = hash_get(&p->fds, str);
 	descriptor->removed = 1;
@@ -101,10 +101,16 @@ void poller_wait(poller_t *p, int timeout)
 	for (hash_it_init(&p->fds, &hi); hash_it_item(&hi); hash_it_next(&hi)) {
 		descriptor_t *descriptor = hash_it_item(&hi);
 		if (descriptor->removed) {
-			mylog(LOG_DEBUG, "Removing: %d", descriptor->fd);
+			log(LOG_DEBUG, "Removing: %d", descriptor->fd);
 			poller_unregister_finalize_iterator(&hi, descriptor);
 			continue;
 		}
+		if (descriptor->fd == 7) {
+			char *dbgs = descriptor_dbg_string(descriptor);
+			log(LOG_DEBUG, "Descriptor: %d %s", descriptor->fd, dbgs);
+			free(dbgs);
+		}
+
 		if (descriptor->events != 0) {
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
@@ -114,7 +120,16 @@ void poller_wait(poller_t *p, int timeout)
 						     * tentative_num_fds);
 			}
 			fds[num_fds - 1].fd = descriptor->fd;
-			fds[num_fds - 1].events = descriptor->events;
+			fds[num_fds - 1].events = 0;
+			if (descriptor->events & POLLER_IN) {
+				fds[num_fds - 1].events |= POLLIN;
+			}
+			if (descriptor->events & POLLER_OUT) {
+				fds[num_fds - 1].events |= POLLOUT;
+			}
+			if (descriptor->events & POLLER_HUP) {
+				fds[num_fds - 1].events |= POLLHUP;
+			}
 		}
 	}
 	int poll_ret = poll(fds, num_fds, timeout);
@@ -127,9 +142,9 @@ void poller_wait(poller_t *p, int timeout)
 		descriptor_t* descriptor = poller_get_descriptor(p, fds[i].fd);
 		if (fds[i].revents & POLLIN)
 			descriptor->on_in(descriptor->data);
-		if (!descriptor->removed && fds[i].revents & POLLOUT)
+		if (!descriptor->removed && (fds[i].revents & POLLOUT))
 			descriptor->on_out(descriptor->data);
-		if (!descriptor->removed && fds[i].revents & POLLHUP)
+		if (!descriptor->removed && (fds[i].revents & POLLHUP))
 			descriptor->on_hup(descriptor->data);
 		if (descriptor->removed) {
 			poller_unregister_finalize(p, descriptor->fd);
@@ -146,23 +161,21 @@ void poller_gettime(struct timespec *time)
 	}
 }
 
-void poller_one_shot(poller_t* poller) {
+void poller_one_shot(poller_t *poller)
+{
 	int timeout_ms = poller->timeout;
-
-		poller_wait(poller, timeout_ms);
-		struct timespec now;
-		poller_gettime(&now);
-		if (poller->timeout >= 0) {
-			timeout_ms -=
-				(now.tv_sec - poller->last_timeout.tv_sec)
-					* 1000
-				+ (now.tv_nsec - poller->last_timeout.tv_nsec)
+	poller_wait(poller, timeout_ms);
+	struct timespec now;
+	poller_gettime(&now);
+	if (poller->timeout >= 0) {
+		timeout_ms -= (now.tv_sec - poller->last_timeout.tv_sec) * 1000
+			      + (now.tv_nsec - poller->last_timeout.tv_nsec)
 					/ 1000000;
-			if (timeout_ms <= 0) {
-				poller->timed_out(poller->data);
-				timeout_ms = poller->timeout;
-			}
+		if (timeout_ms <= 0) {
+			poller->timed_out(poller->data);
+			timeout_ms = poller->timeout;
 		}
+	}
 }
 
 void poller_loop(poller_t *poller)
@@ -171,4 +184,15 @@ void poller_loop(poller_t *poller)
 	while (!poller->want_exit) {
 		poller_one_shot(poller);
 	}
+}
+
+char *descriptor_dbg_string(descriptor_t *d)
+{
+	char *ret = bip_malloc(256);
+	snprintf(ret, 255, "descriptor_t %0.8x, fd: %d %s %s %s, removed: %d",
+		 d, d->fd, d->events & POLLER_IN ? "POLLER_IN" : "",
+		 d->events & POLLER_OUT ? "POLLER_OUT" : "",
+		 d->events & POLLER_HUP ? "POLLER_HUP" : "", d->removed);
+	ret[255] = 0;
+	return ret;
 }

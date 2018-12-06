@@ -21,5 +21,4 @@ int adm_bip(bip_t *bip, struct link_client *ic, struct line *line, int privmsg);
 int ssl_check_trust(struct link_client *ic);
 void adm_blreset(struct link_client *ic);
 void bip_notify(struct link_client *ic, char *fmt, ...);
-
 #endif

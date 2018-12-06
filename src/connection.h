@@ -63,11 +63,9 @@
 #define READ_OK 0
 #define READ_ERROR -1
 
-#ifdef HAVE_LIBSSL
 #define SSL_CHECK_NONE (0)
 #define SSL_CHECK_BASIC (1)
 #define SSL_CHECK_CA (2)
-#endif
 
 typedef struct {
 	char *ciphers;
@@ -109,9 +107,9 @@ typedef struct connection {
 #ifdef HAVE_LIBSSL
 	SSL_CTX *ssl_ctx_h;
 	SSL *ssl_h;
-	int ssl_check_mode;
 	X509 *cert;
 #endif
+	int ssl_check_mode;
 	char *localip, *remoteip;
 	uint16_t localport, remoteport;
 } connection_t;
@@ -134,8 +132,12 @@ typedef struct listener {
 } listener_t;
 
 connection_t *connection_new(char *dsthostname, int dstport, char *srchostname,
-		int srcport, connection_ssl_options_t* ssl_options, int timeout);
-listener_t *listener_new(char *hostname, int port, listener_ssl_options_t* ssl_options);
+			     int srcport, connection_ssl_options_t *ssl_options,
+			     int timeout);
+listener_t *listener_new(char *hostname, int port,
+			 listener_ssl_options_t *ssl_options);
+void listener_init(listener_t *listener, char *hostname, int port,
+		   listener_ssl_options_t *options);
 connection_t *accept_new(listener_t *cn);
 void connection_free(connection_t *cn);
 void connection_close(connection_t *cn);
@@ -157,6 +159,5 @@ char *connection_remoteip(connection_t *cn);
 poller_t* global_poller();
 
 void connection_ssl_initialize();
-
 
 #endif

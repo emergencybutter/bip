@@ -305,7 +305,13 @@ int main(int argc, char **argv)
 	close(fd);
 
 	bip.listener = listener_new(conf_ip, conf_port,
-			conf_css ? &listener_ssl_options : NULL);
+				    conf_css ?
+#ifdef HAVE_LIBSSL
+					     &listener_ssl_options
+#else
+					     NULL
+#endif
+					     : NULL);
 	if (!bip.listener || bip.listener->handle == -1)
 		fatal("Could not create listening socket");
 

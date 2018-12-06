@@ -389,6 +389,17 @@ void *list_remove_if_exists(list_t *list, const void *ptr)
 	return NULL;
 }
 
+int list_count(list_t *list)
+{
+	int ret = 0;
+	list_iterator_t li;
+	for (list_it_init(list, &li); list_it_item(&li); list_it_next(&li)) {
+		ret++;
+	}
+	return ret;
+}
+
+
 void *list_remove(list_t *list, const void *ptr)
 {
 	void *ret;
@@ -828,4 +839,33 @@ void array_free(array_t *a)
 	if (a->elemv)
 		free(a->elemv);
 	free(a);
+}
+
+void hash_binary(char *hex, unsigned char **password, unsigned int *seed)
+{
+	unsigned char *md5;
+	unsigned int buf;
+	int i;
+
+	if (strlen(hex) != 40)
+		fatal("Incorrect password format %s\n", hex);
+
+	md5 = bip_malloc(20);
+	for (i = 0; i < 20; i++) {
+		sscanf(hex + 2 * i, "%02x", &buf);
+		md5[i] = buf;
+	}
+
+	*seed = 0;
+	sscanf(hex, "%02x", &buf);
+	*seed |= buf << 24;
+	sscanf(hex + 2, "%02x", &buf);
+	*seed |= buf << 16;
+	sscanf(hex + 2 * 2, "%02x", &buf);
+	*seed |= buf << 8;
+	sscanf(hex + 2 * 3, "%02x", &buf);
+	*seed |= buf;
+
+	MAYFREE(*password);
+	*password = md5;
 }

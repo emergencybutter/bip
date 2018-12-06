@@ -86,35 +86,6 @@ void log_file_setup(void)
 	}
 }
 
-static void hash_binary(char *hex, unsigned char **password, unsigned int *seed)
-{
-	unsigned char *md5;
-	unsigned int buf;
-	int i;
-
-	if (strlen(hex) != 40)
-		fatal("Incorrect password format %s\n", hex);
-
-	md5 = bip_malloc(20);
-	for (i = 0; i < 20; i++) {
-		sscanf(hex + 2 * i, "%02x", &buf);
-		md5[i] = buf;
-	}
-
-	*seed = 0;
-	sscanf(hex, "%02x", &buf);
-	*seed |= buf << 24;
-	sscanf(hex + 2, "%02x", &buf);
-	*seed |= buf << 16;
-	sscanf(hex + 2 * 2, "%02x", &buf);
-	*seed |= buf << 8;
-	sscanf(hex + 2 * 3, "%02x", &buf);
-	*seed |= buf;
-
-	MAYFREE(*password);
-	*password = md5;
-}
-
 static int add_server(bip_t *bip, struct server *s, list_t *data)
 {
 	struct tuple *t;

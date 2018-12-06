@@ -44,4 +44,5 @@ void poller_wait(poller_t *p, int timeout);
 void poller_gettime(struct timespec *time);
 void poller_loop(poller_t *poller);
 
+char *descriptor_dbg_string(descriptor_t *d);
 #endif // POLLER_H_
