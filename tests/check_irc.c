@@ -168,40 +168,6 @@ void irc_test_client_process(irc_test_client_t *client)
 	}
 }
 
-struct server_and_client{
-	irc_test_server_t *server;
-	irc_test_client_t* client;
-};
-
-void irc_test_server_and_client_process(struct server_and_client *sac)
-{
-	if (sac->server)
-		irc_test_server_process(sac->server);
-	if (sac->client)
-		irc_test_client_process(sac->client);
-	if (sac->client
-	    && sac->client->proxy_replay_line
-		       < array_count(&sac->client->proxy_replay_lines)) {
-		log(LOG_ERROR, "waiting at client step %s (%d)",
-		    array_get(&sac->client->proxy_replay_lines, sac->client->proxy_replay_line), sac->client->connection->connected);
-		return;
-	}
-	if (sac->server) {
-		if (array_count(&sac->server->clients) < sac->server->num_expected_clients)
-			return;
-		for (int i = 0; i < array_count(&sac->server->clients); i++) {
-			irc_test_server_client_state_t *client_state =
-				array_get(&sac->server->clients, i);
-			if (client_state->replay_line
-			    < array_count(client_state->replay_lines)) {
-				return;
-			}
-		}
-	}
-	sighup = 1;
-}
-
-
 void set_up_bip(bip_t* bip) {
 	struct network *n;
 	n = bip_calloc(sizeof(struct network), 1);
@@ -253,15 +219,11 @@ START_TEST(test_proxy_connects)
 	array_push(&server.client_replay_lines,
 		   "S::servername 376 end :End of /MOTD command.\r\n");
 
-	struct server_and_client sac;
-	sac.server = &server;
-	sac.client = NULL;
-
 	set_up_bip(&bip);
 	ck_assert_int_eq(0, list_count(&bip.conn_list));
 	bip_tick(&bip);
 	ck_assert_int_eq(1, list_count(&bip.conn_list));
-	while (array_count(&sac.server->clients) != 1) {
+	while (array_count(&server.clients) != 1) {
 		irc_test_server_process(&server);
 		irc_one_shot(&bip, 0);
 	}
@@ -276,9 +238,9 @@ START_TEST(test_proxy_connects)
 		irc_one_shot(&bip, 0);
 		irc_test_server_process(&server);
 	}
-	ck_assert_int_eq(array_count(&sac.server->clients), 1);
+	ck_assert_int_eq(array_count(&server.clients), 1);
 	irc_test_server_client_state_t *client_state =
-		array_get(&sac.server->clients, 0);
+		array_get(&server.clients, 0);
 	ck_assert_int_eq(client_state->replay_line, 4);
 }
 END_TEST
@@ -317,15 +279,11 @@ START_TEST(test_proxy_and_client_connects)
 	array_push(&client.proxy_replay_lines,
 		   "R::servername 376 end :End of /MOTD command.");
 
-	struct server_and_client sac;
-	sac.server = &server;
-	sac.client = &client;
-
 	set_up_bip(&bip);
 	ck_assert_int_eq(0, list_count(&bip.conn_list));
 	bip_tick(&bip);
 	ck_assert_int_eq(1, list_count(&bip.conn_list));
-	while (array_count(&sac.server->clients) != 1) {
+	while (array_count(&server.clients) != 1) {
 		irc_test_server_process(&server);
 		irc_one_shot(&bip, 0);
 	}
@@ -340,9 +298,9 @@ START_TEST(test_proxy_and_client_connects)
 		irc_one_shot(&bip, 0);
 		irc_test_server_process(&server);
 	}
-	ck_assert_int_eq(array_count(&sac.server->clients), 1);
+	ck_assert_int_eq(array_count(&server.clients), 1);
 	irc_test_server_client_state_t *client_state =
-		array_get(&sac.server->clients, 0);
+		array_get(&server.clients, 0);
 	ck_assert_int_eq(client_state->replay_line, 4);
 	while (link->l_clientc == 0) {
 		irc_one_shot(&bip, 0);
