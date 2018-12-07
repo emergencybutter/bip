@@ -30,7 +30,8 @@ static int irc_join(struct link_server *server, struct line *line);
 static int irc_part(struct link_server *server, struct line *line);
 static int irc_mode(struct link_server *server, struct line *line);
 static int irc_mode_channel(struct link_server *s, struct channel *channel,
-				struct line *line, const char* mode, int add, int cur_arg);
+			    struct line *line, const char *mode, int add,
+			    int cur_arg);
 static int irc_kick(struct link_server *server, struct line *line);
 static int irc_privmsg(struct link_server *server, struct line *line);
 static int irc_notice(struct link_server *server, struct line *line);
@@ -50,7 +51,7 @@ static void ls_set_nick(struct link_server *ircs, char *nick);
 static void server_set_chanmodes(struct link_server *l, const char *chanmodes);
 static void server_set_prefix(struct link_server *l, const char *prefix);
 static void server_init_modes(struct link_server *s);
-static int bip_get_index(const char* str, char car);
+static int bip_get_index(const char *str, char car);
 static int bip_fls(int v);
 
 void oidentd_dump(bip_t *bip);
@@ -62,7 +63,7 @@ extern int conf_reconn_timer;
 void write_user_list(connection_t *c, char *dest);
 
 static void irc_copy_cli(struct link_client *src, struct link_client *dest,
-		struct line *line);
+			 struct line *line);
 static void irc_cli_make_join(struct link_client *ic);
 static void server_setup_reconnect_timer(struct link *link);
 int irc_cli_bip(bip_t *bip, struct link_client *ic, struct line *line);
@@ -114,7 +115,7 @@ list_t *channel_name_list(struct link_server *server, struct channel *c)
 	ret = list_new(NULL);
 	*str = 0;
 	for (hash_it_init(&c->ovmasks, &hi); hash_it_key(&hi);
-			hash_it_next(&hi)){
+	     hash_it_next(&hi)) {
 		const char *nick = hash_it_key(&hi);
 		long int ovmask = (long int)hash_it_item(&hi);
 
@@ -166,7 +167,7 @@ static int irc_001(struct link_server *server, struct line *line)
 	for (i = 0; i < LINK(server)->l_clientc; i++) {
 		struct link_client *c = LINK(server)->l_clientv[i];
 		WRITE_LINE1(CONN(c), LINK(server)->cli_nick, "NICK",
-				server->nick);
+			    server->nick);
 	}
 	return OK_COPY;
 }
@@ -207,7 +208,7 @@ static void irc_server_join(struct link_server *s)
 {
 	list_iterator_t it;
 	for (list_it_init(&LINK(s)->chan_infos_order, &it); list_it_item(&it);
-			list_it_next(&it)) {
+	     list_it_next(&it)) {
 		struct chan_info *ci = list_it_item(&it);
 		if (!ci->key)
 			WRITE_LINE1(CONN(s), NULL, "JOIN", ci->name);
@@ -220,21 +221,21 @@ static void irc_server_connected(struct link_server *server)
 {
 	int i;
 
-        LINK(server)->s_state = IRCS_CONNECTED;
-        LINK(server)->s_conn_attempt = 0;
+	LINK(server)->s_state = IRCS_CONNECTED;
+	LINK(server)->s_conn_attempt = 0;
 
-	mylog(LOG_INFO, "[%s] Connected for user %s",
-			LINK(server)->name, LINK(server)->user->name);
+	mylog(LOG_INFO, "[%s] Connected for user %s", LINK(server)->name,
+	      LINK(server)->user->name);
 
-        irc_server_join(server);
-        log_connected(LINK(server)->log);
+	irc_server_join(server);
+	log_connected(LINK(server)->log);
 
 	if (LINK(server)->cli_nick) {
 		/* we change nick on client */
 		for (i = 0; i < LINK(server)->l_clientc; i++) {
 			struct link_client *ic = LINK(server)->l_clientv[i];
 			WRITE_LINE1(CONN(ic), LINK(server)->cli_nick, "NICK",
-					server->nick);
+				    server->nick);
 		}
 		free(LINK(server)->cli_nick);
 		LINK(server)->cli_nick = NULL;
@@ -243,21 +244,21 @@ static void irc_server_connected(struct link_server *server)
 	/* basic helper for nickserv and co */
 	list_iterator_t itocs;
 	for (list_it_init(&LINK(server)->on_connect_send, &itocs);
-				list_it_item(&itocs); list_it_next(&itocs)) {
+	     list_it_item(&itocs); list_it_next(&itocs)) {
 		ssize_t len = strlen(list_it_item(&itocs)) + 2;
 		char *str = bip_malloc(len + 1);
 		sprintf(str, "%s\r\n", (char *)list_it_item(&itocs));
 		write_line(CONN(server), str);
 		free(str);
-        }
+	}
 
 	if (LINK(server)->l_clientc == 0) {
 		if (LINK(server)->away_nick)
 			WRITE_LINE1(CONN(server), NULL, "NICK",
-					LINK(server)->away_nick);
+				    LINK(server)->away_nick);
 		if (LINK(server)->no_client_away_msg)
 			WRITE_LINE1(CONN(server), NULL, "AWAY",
-					LINK(server)->no_client_away_msg);
+				    LINK(server)->no_client_away_msg);
 	}
 }
 
@@ -321,9 +322,9 @@ static int irc_315(struct link_server *server, struct line *l)
 		if (link->who_client->who_count > 0) {
 			--link->who_client->who_count;
 			mylog(LOG_DEBUG,
-				"RPL_ENDOFWHO: "
-				"Decrementing who count for %p: %d",
-				link->who_client, link->who_client->who_count);
+			      "RPL_ENDOFWHO: "
+			      "Decrementing who count for %p: %d",
+			      link->who_client, link->who_client->who_count);
 		}
 	}
 
@@ -350,7 +351,7 @@ void rotate_who_client(struct link *link)
 }
 
 int irc_dispatch_server(bip_t *bip, struct link_server *server,
-		struct line *line)
+			struct line *line)
 {
 	int ret = OK_COPY;
 	/* shut gcc up */
@@ -400,8 +401,9 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 						newnick[7] = '`';
 					}
 				} else {
-					newnick[8] = rand() *
-						('z' - 'a') / RAND_MAX + 'a';
+					newnick[8] =
+						rand() * ('z' - 'a') / RAND_MAX
+						+ 'a';
 				}
 				newnick[9] = 0;
 			}
@@ -422,28 +424,34 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 		if (irc_line_elem_equals(line, 0, "005")) {
 			int i;
 			for (i = irc_line_count(line) - 1; i > 0; i--) {
-				if (LINK(server)->ignore_server_capab &&
-						irc_line_elem_equals(line, i, "CAPAB"))
+				if (LINK(server)->ignore_server_capab
+				    && irc_line_elem_equals(line, i, "CAPAB"))
 					irc_line_drop(line, i);
-				else if (!strncmp(irc_line_elem(line, i), "CHANMODES=", 10))
-					server_set_chanmodes(server, irc_line_elem(line, i) + 10);
-				else if (!strncmp(irc_line_elem(line, i), "PREFIX=(", 8))
-					server_set_prefix(server, irc_line_elem(line, i) + 7);
+				else if (!strncmp(irc_line_elem(line, i),
+						  "CHANMODES=", 10))
+					server_set_chanmodes(
+						server,
+						irc_line_elem(line, i) + 10);
+				else if (!strncmp(irc_line_elem(line, i),
+						  "PREFIX=(", 8))
+					server_set_prefix(server,
+							  irc_line_elem(line, i)
+								  + 7);
 			}
 		}
 		if (irc_line_elem_equals(line, 0, "NOTICE")) {
 		} else if (irc_line_elem_equals(line, 0, "376")) {
-							/* end of motd */
+			/* end of motd */
 			irc_server_connected(server);
 			list_add_last(&LINK(server)->init_strings,
-					irc_line_dup(line));
+				      irc_line_dup(line));
 		} else if (irc_line_elem_equals(line, 0, "422")) { /* no motd */
 			irc_server_connected(server);
 			list_add_last(&LINK(server)->init_strings,
-					irc_line_dup(line));
+				      irc_line_dup(line));
 		} else {
 			list_add_last(&LINK(server)->init_strings,
-					irc_line_dup(line));
+				      irc_line_dup(line));
 		}
 	} else if (irc_line_elem_equals(line, 0, "001")) {
 		ret = irc_001(server, line);
@@ -452,7 +460,7 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 				return ERR_PROTOCOL;
 			/* update the irc mask */
 			list_add_last(&LINK(server)->init_strings,
-					irc_line_dup(line));
+				      irc_line_dup(line));
 		}
 	} else if (irc_line_elem_equals(line, 0, "JOIN")) {
 		ret = irc_join(server, line);
@@ -493,8 +501,8 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 	if (ret == OK_COPY) {
 		int i;
 		for (i = 0; i < LINK(server)->l_clientc; i++) {
-			if (TYPE(LINK(server)->l_clientv[i]) ==
-					IRC_TYPE_CLIENT) {
+			if (TYPE(LINK(server)->l_clientv[i])
+			    == IRC_TYPE_CLIENT) {
 				char *s = irc_line_to_string(line);
 				write_line(CONN(LINK(server)->l_clientv[i]), s);
 				free(s);
@@ -508,10 +516,10 @@ int irc_dispatch_server(bip_t *bip, struct link_server *server,
 		write_line(CONN(LINK(server)->who_client), s);
 		free(s);
 	}
-	if (LINK(server)->who_client &&
-			LINK(server)->who_client->who_count == 0) {
+	if (LINK(server)->who_client
+	    && LINK(server)->who_client->who_count == 0) {
 		mylog(LOG_DEBUG, "OK_COPY_WHO: who_count for %p is nul",
-			LINK(server)->who_client);
+		      LINK(server)->who_client);
 		rotate_who_client(LINK(server));
 	}
 	return ret;
@@ -527,8 +535,8 @@ static void irc_send_join(struct link_client *ic, struct channel *chan)
 	assert(user);
 
 	/* user ircmask here for rbot */
-	ircmask = bip_malloc(strlen(LINK(ic)->l_server->nick) +
-			strlen(BIP_FAKEMASK) + 1);
+	ircmask = bip_malloc(strlen(LINK(ic)->l_server->nick)
+			     + strlen(BIP_FAKEMASK) + 1);
 	strcpy(ircmask, LINK(ic)->l_server->nick);
 	strcat(ircmask, BIP_FAKEMASK);
 	WRITE_LINE1(CONN(ic), ircmask, "JOIN", chan->name);
@@ -536,10 +544,10 @@ static void irc_send_join(struct link_client *ic, struct channel *chan)
 
 	if (chan->topic)
 		WRITE_LINE3(CONN(ic), P_SERV, "332", LINK(ic)->l_server->nick,
-				chan->name, chan->topic);
+			    chan->name, chan->topic);
 	if (chan->creator && chan->create_ts)
 		WRITE_LINE4(CONN(ic), P_SERV, "333", LINK(ic)->l_server->nick,
-				chan->name, chan->creator, chan->create_ts);
+			    chan->name, chan->creator, chan->create_ts);
 
 	list_t *name_list = channel_name_list(LINK(ic)->l_server, chan);
 	char *s;
@@ -548,13 +556,13 @@ static void irc_send_join(struct link_client *ic, struct channel *chan)
 		tmptype[0] = chan->type;
 		tmptype[1] = 0;
 		WRITE_LINE4(CONN(ic), P_SERV, "353", LINK(ic)->l_server->nick,
-				tmptype, chan->name, s);
+			    tmptype, chan->name, s);
 		free(s);
 	}
 	list_free(name_list);
 
 	WRITE_LINE3(CONN(ic), P_SERV, "366", LINK(ic)->l_server->nick,
-			chan->name, "End of /NAMES list.");
+		    chan->name, "End of /NAMES list.");
 }
 
 static void write_init_string(connection_t *c, struct line *line, char *nick)
@@ -572,8 +580,8 @@ static void bind_to_link(struct link *l, struct link_client *ic)
 
 	LINK(ic) = l;
 	l->l_clientc++;
-	l->l_clientv = bip_realloc(l->l_clientv, l->l_clientc *
-			sizeof(struct link_client *));
+	l->l_clientv = bip_realloc(l->l_clientv,
+				   l->l_clientc * sizeof(struct link_client *));
 	l->l_clientv[i] = ic;
 }
 
@@ -590,7 +598,7 @@ void unbind_from_link(struct link_client *ic)
 
 	if (l->who_client == ic) {
 		mylog(LOG_DEBUGVERB, "unbind_from_link:  %p: %d", l->who_client,
-				ic->who_count);
+		      ic->who_count);
 		l->who_client = NULL;
 	}
 
@@ -598,8 +606,8 @@ void unbind_from_link(struct link_client *ic)
 		l->l_clientv[i - 1] = l->l_clientv[i];
 
 	l->l_clientc--;
-	l->l_clientv = bip_realloc(l->l_clientv, l->l_clientc *
-			sizeof(struct link_client *));
+	l->l_clientv = bip_realloc(l->l_clientv,
+				   l->l_clientc * sizeof(struct link_client *));
 	if (l->l_clientc == 0) { /* bip_realloc was equiv to free() */
 		l->l_clientv = NULL;
 		return;
@@ -651,21 +659,21 @@ static void irc_cli_make_join(struct link_client *ic)
 		/* join channels, step one, those in conf, in order */
 		list_iterator_t li;
 		for (list_it_init(&LINK(ic)->chan_infos_order, &li);
-				list_it_item(&li); list_it_next(&li)) {
-			struct chan_info *ci = (struct chan_info *)
-				list_it_item(&li);
+		     list_it_item(&li); list_it_next(&li)) {
+			struct chan_info *ci =
+				(struct chan_info *)list_it_item(&li);
 			struct channel *chan;
 			if ((chan = hash_get(&LINK(ic)->l_server->channels,
-							ci->name)))
+					     ci->name)))
 				irc_send_join(ic, chan);
 		}
 
 		/* step two, those not in conf */
 		hash_iterator_t hi;
 		for (hash_it_init(&LINK(ic)->l_server->channels, &hi);
-				hash_it_item(&hi); hash_it_next(&hi)) {
-			struct channel *chan = (struct channel *)
-				hash_it_item(&hi);
+		     hash_it_item(&hi); hash_it_next(&hi)) {
+			struct channel *chan =
+				(struct channel *)hash_it_item(&hi);
 			if (!hash_get(&LINK(ic)->chan_infos, chan->name))
 				irc_send_join(ic, chan);
 		}
@@ -682,7 +690,7 @@ void irc_cli_backlog(struct link_client *ic, int hours)
 
 	if (!user->backlog) {
 		mylog(LOG_DEBUG, "Backlog disabled for %s, not backlogging",
-				user->name);
+		      user->name);
 		return;
 	}
 
@@ -699,11 +707,11 @@ void irc_cli_backlog(struct link_client *ic, int hours)
 	backlogl = log_backlogs(LINK(ic)->log);
 	while ((bl = list_remove_first(backlogl))) {
 		bllines = backlog_lines(LINK(ic)->log, bl,
-				LINK(ic)->l_server->nick, hours);
+					LINK(ic)->l_server->nick, hours);
 		if (bllines) {
 			if (!list_is_empty(bllines)) {
 				mylog(LOG_INFO, "[%s] backlogging: %s",
-						LINK(ic)->name, bl);
+				      LINK(ic)->name, bl);
 				write_lines(CONN(ic), bllines);
 			}
 			list_free(bllines);
@@ -714,7 +722,7 @@ void irc_cli_backlog(struct link_client *ic, int hours)
 }
 
 static int irc_cli_startup(bip_t *bip, struct link_client *ic,
-		struct line *line)
+			   struct line *line)
 {
 	char *init_nick;
 	char *user, *pass, *connname;
@@ -741,11 +749,12 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 
 	list_iterator_t it;
 	for (list_it_init(&bip->link_list, &it); list_it_item(&it);
-			list_it_next(&it)) {
+	     list_it_next(&it)) {
 		struct link *l = list_it_item(&it);
-		log(LOG_DEBUG, "Found %s %s, %s %s", user,  l->user->name, connname, l->name);
-		if (strcmp(user, l->user->name) == 0 &&
-				strcmp(connname, l->name) == 0) {
+		log(LOG_DEBUG, "Found %s %s, %s %s", user, l->user->name,
+		    connname, l->name);
+		if (strcmp(user, l->user->name) == 0
+		    && strcmp(connname, l->name) == 0) {
 			if (chash_cmp(pass, l->user->password, l->user->seed)
 			    == 0) {
 				bind_to_link(l, ic);
@@ -756,7 +765,7 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 
 	if (!LINK(ic))
 		mylog(LOG_ERROR, "[%s] Invalid credentials (user: %s)",
-				 connname, user);
+		      connname, user);
 	free(user);
 	free(connname);
 	free(pass);
@@ -783,7 +792,8 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 
 	if (LINK(ic)->s_state == IRCS_NONE) {
 		/* drop it if corresponding server hasn't connected at all. */
-		write_line_fast(CONN(ic), ":irc.bip.net NOTICE pouet "
+		write_line_fast(CONN(ic),
+				":irc.bip.net NOTICE pouet "
 				":ERROR Proxy not yet connected, try again "
 				"later\r\n");
 		unbind_from_link(ic);
@@ -794,8 +804,8 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 	list_remove(&bip->connecting_client_list, ic);
 	TYPE(ic) = IRC_TYPE_CLIENT;
 
-	for (list_it_init(&LINK(ic)->init_strings, &it);
-			list_it_item(&it); list_it_next(&it))
+	for (list_it_init(&LINK(ic)->init_strings, &it); list_it_item(&it);
+	     list_it_next(&it))
 		write_init_string(CONN(ic), list_it_item(&it), init_nick);
 
 	/* we change nick on server */
@@ -805,10 +815,10 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 
 		if (!LINK(ic)->ignore_first_nick)
 			WRITE_LINE1(CONN(server), NULL, "NICK", init_nick);
-		else if (LINK(ic)->away_nick &&
-				strcmp(LINK(ic)->away_nick, server->nick) == 0)
+		else if (LINK(ic)->away_nick
+			 && strcmp(LINK(ic)->away_nick, server->nick) == 0)
 			WRITE_LINE1(CONN(server), NULL, "NICK",
-					LINK(server)->connect_nick);
+				    LINK(server)->connect_nick);
 
 		/* change away status */
 		if (server && LINK(ic)->no_client_away_msg)
@@ -847,8 +857,8 @@ static int irc_cli_nick(bip_t *bip, struct link_client *ic, struct line *line)
 
 	if ((ic->state & IRCC_PASS) != IRCC_PASS)
 		WRITE_LINE2(CONN(ic), P_SERV, "NOTICE", ic->init_nick,
-				"You should type /QUOTE PASS your_username:"
-				"your_password:your_connection_name");
+			    "You should type /QUOTE PASS your_username:"
+			    "your_password:your_connection_name");
 
 	return OK_FORGET;
 }
@@ -892,7 +902,7 @@ static int irc_cli_quit(struct link_client *ic, struct line *line)
 }
 
 static int irc_cli_privmsg(bip_t *bip, struct link_client *ic,
-		struct line *line)
+			   struct line *line)
 {
 	if (!irc_line_includes(line, 2))
 		return OK_FORGET;
@@ -901,7 +911,7 @@ static int irc_cli_privmsg(bip_t *bip, struct link_client *ic,
 		return adm_bip(bip, ic, line, 1);
 	else
 		log_cli_privmsg(LINK(ic)->log, LINK(ic)->l_server->nick,
-			irc_line_elem(line, 1), irc_line_elem(line, 2));
+				irc_line_elem(line, 1), irc_line_elem(line, 2));
 
 	if (LINK(ic)->user->blreset_on_talk) {
 		if (LINK(ic)->user->blreset_connection)
@@ -917,7 +927,7 @@ static int irc_cli_notice(struct link_client *ic, struct line *line)
 	if (!irc_line_includes(line, 2))
 		return OK_FORGET;
 	log_cli_notice(LINK(ic)->log, LINK(ic)->l_server->nick,
-				irc_line_elem(line, 1), irc_line_elem(line, 2));
+		       irc_line_elem(line, 1), irc_line_elem(line, 2));
 	if (LINK(ic)->user->blreset_on_talk) {
 		if (LINK(ic)->user->blreset_connection)
 			log_reset_all(LINK(ic)->log);
@@ -934,8 +944,8 @@ static int irc_cli_who(struct link_client *ic, struct line *line)
 	++ic->who_count;
 	if (ic->who_count == 1)
 		ic->whoc_tstamp = time(NULL);
-	mylog(LOG_DEBUG, "cli_who: Incrementing who count for %p: %d",
-				ic, ic->who_count);
+	mylog(LOG_DEBUG, "cli_who: Incrementing who count for %p: %d", ic,
+	      ic->who_count);
 
 	if (l->who_client && l->who_client != ic) {
 		list_add_first(&ic->who_queue, irc_line_to_string(line));
@@ -956,15 +966,15 @@ static int irc_cli_mode(struct link_client *ic, struct line *line)
 		return OK_COPY;
 
 	/* This is a wild guess and that sucks. */
-	if (!irc_line_elem_equals(line, 0, "MODE") ||
-			strchr(irc_line_elem(line, 2), 'b') == NULL)
+	if (!irc_line_elem_equals(line, 0, "MODE")
+	    || strchr(irc_line_elem(line, 2), 'b') == NULL)
 		return OK_COPY;
 
 	++ic->who_count;
 	if (ic->who_count == 1)
 		ic->whoc_tstamp = time(NULL);
 	mylog(LOG_DEBUG, "cli_mode: Incrementing who count for %p: %d",
-				l->who_client, ic->who_count);
+	      l->who_client, ic->who_count);
 
 	if (l->who_client && l->who_client != ic) {
 		list_add_first(&ic->who_queue, irc_line_to_string(line));
@@ -987,18 +997,18 @@ static void irc_notify_disconnection(struct link_server *is)
 		struct link_client *ic = LINK(is)->l_clientv[i];
 		hash_iterator_t hi;
 		for (hash_it_init(&is->channels, &hi); hash_it_item(&hi);
-			hash_it_next(&hi)) {
+		     hash_it_next(&hi)) {
 			struct channel *c = (struct channel *)hash_it_item(&hi);
-			WRITE_LINE3(CONN(ic), P_IRCMASK, "KICK",
-					c->name, is->nick,
-					"Server disconnected, reconnecting");
+			WRITE_LINE3(CONN(ic), P_IRCMASK, "KICK", c->name,
+				    is->nick,
+				    "Server disconnected, reconnecting");
 		}
 		bip_notify(ic, "Server disconnected, reconnecting");
 	}
 }
 
 void irc_add_channel_info(struct link_server *ircs, const char *chan,
-		const char *key)
+			  const char *key)
 {
 	struct chan_info *ci;
 	if (!ischannel(*chan))
@@ -1083,8 +1093,8 @@ static int irc_cli_part(struct link_client *irc, struct line *line)
 
 	cname = (char *)irc_line_elem(line, 1);
 
-	if ((ci = hash_remove_if_exists(&LINK(irc)->chan_infos,
-					cname)) != NULL) {
+	if ((ci = hash_remove_if_exists(&LINK(irc)->chan_infos, cname))
+	    != NULL) {
 		list_remove(&LINK(irc)->chan_infos_order, ci);
 		free(ci->name);
 		if (ci->key)
@@ -1101,8 +1111,8 @@ static int irc_dispatch_trust_client(struct link_client *ic, struct line *line)
 	if (!irc_line_includes(line, 1))
 		return ERR_PROTOCOL;
 
-	if (strcasecmp(irc_line_elem(line, 0), "BIP") == 0 &&
-	    strcasecmp(irc_line_elem(line, 1), "TRUST") == 0)
+	if (strcasecmp(irc_line_elem(line, 0), "BIP") == 0
+	    && strcasecmp(irc_line_elem(line, 1), "TRUST") == 0)
 		r = adm_trust(ic, line);
 
 	return r;
@@ -1110,7 +1120,7 @@ static int irc_dispatch_trust_client(struct link_client *ic, struct line *line)
 #endif
 
 static int irc_dispatch_client(bip_t *bip, struct link_client *ic,
-		struct line *line)
+			       struct line *line)
 {
 	int r = OK_COPY;
 	if (irc_line_count(line) == 0)
@@ -1120,10 +1130,11 @@ static int irc_dispatch_client(bip_t *bip, struct link_client *ic,
 		if (!irc_line_includes(line, 1))
 			return ERR_PROTOCOL;
 		WRITE_LINE1(CONN(ic), link_name((struct link_any *)ic), "PONG",
-				irc_line_elem(line, 1));
+			    irc_line_elem(line, 1));
 		r = OK_FORGET;
 	} else if (LINK(ic)->s_state != IRCS_CONNECTED) {
-		write_line_fast(CONN(ic), ":irc.bip.net NOTICE pouet "
+		write_line_fast(CONN(ic),
+				":irc.bip.net NOTICE pouet "
 				":ERROR Proxy not connected, please wait "
 				"before sending commands\r\n");
 		r = OK_FORGET;
@@ -1149,16 +1160,17 @@ static int irc_dispatch_client(bip_t *bip, struct link_client *ic,
 
 	if (r == OK_COPY || r == OK_COPY_CLI) {
 		char *str = irc_line_to_string(line);
-		if (LINK(ic)->s_state == IRCS_CONNECTED &&
-				LINK(ic)->l_server->nick)
+		if (LINK(ic)->s_state == IRCS_CONNECTED
+		    && LINK(ic)->l_server->nick)
 			write_line(CONN(LINK(ic)->l_server), str);
 		else if (LINK(ic)->l_server->nick)
 			WRITE_LINE2(CONN(ic), P_IRCMASK,
-					(LINK(ic)->user->bip_use_notice ?
-						"NOTICE" : "PRIVMSG"),
-					LINK(ic)->l_server->nick,
-					":Not connected please try again "
-					"later...\r\n");
+				    (LINK(ic)->user->bip_use_notice
+					     ? "NOTICE"
+					     : "PRIVMSG"),
+				    LINK(ic)->l_server->nick,
+				    ":Not connected please try again "
+				    "later...\r\n");
 
 		free(str);
 		if (r == OK_COPY_CLI) {
@@ -1173,15 +1185,15 @@ static int irc_dispatch_client(bip_t *bip, struct link_client *ic,
 }
 
 static void irc_copy_cli(struct link_client *src, struct link_client *dest,
-		struct line *line)
+			 struct line *line)
 {
 	char *str;
 
 	if (src == dest)
 		return;
 
-	if (!irc_line_includes(line, 1) ||
-			!irc_line_elem_equals(line, 0, "PRIVMSG")) {
+	if (!irc_line_includes(line, 1)
+	    || !irc_line_elem_equals(line, 0, "PRIVMSG")) {
 		str = irc_line_to_string(line);
 		write_line(CONN(dest), str);
 		free(str);
@@ -1237,7 +1249,7 @@ static void irc_copy_cli(struct link_client *src, struct link_client *dest,
 }
 
 static int irc_dispatch_loging_client(bip_t *bip, struct link_client *ic,
-		struct line *line)
+				      struct line *line)
 {
 	if (irc_line_count(line) == 0)
 		return ERR_PROTOCOL;
@@ -1255,18 +1267,18 @@ int irc_dispatch(bip_t *bip, struct link_any *l, struct line *line)
 {
 	switch (TYPE(l)) {
 	case IRC_TYPE_SERVER:
-		return irc_dispatch_server(bip, (struct link_server*)l, line);
+		return irc_dispatch_server(bip, (struct link_server *)l, line);
 		break;
 	case IRC_TYPE_CLIENT:
-		return irc_dispatch_client(bip, (struct link_client*)l, line);
+		return irc_dispatch_client(bip, (struct link_client *)l, line);
 		break;
 	case IRC_TYPE_LOGING_CLIENT:
-		return irc_dispatch_loging_client(bip, (struct link_client*)l,
-				line);
+		return irc_dispatch_loging_client(bip, (struct link_client *)l,
+						  line);
 		break;
 #ifdef HAVE_LIBSSL
 	case IRC_TYPE_TRUST_CLIENT:
-		return irc_dispatch_trust_client((struct link_client*)l, line);
+		return irc_dispatch_trust_client((struct link_client *)l, line);
 		break;
 #endif
 	default:
@@ -1364,7 +1376,7 @@ static int irc_333(struct link_server *server, struct line *line)
 		channel->create_ts = bip_strdup("0");
 	}
 	log_init_topic_time(LINK(server)->log, channel->name, channel->creator,
-			channel->create_ts);
+			    channel->create_ts);
 	return OK_COPY;
 }
 
@@ -1397,7 +1409,7 @@ static int irc_353(struct link_server *server, struct line *line)
 	while (*names) {
 		long int ovmask = 0;
 		/* some ircds (e.g. unreal) may display several flags for the
-                   same nick */
+		   same nick */
 		while ((index = bip_get_index(server->prefixes, *names))) {
 			ovmask |= 1 << index;
 			names++;
@@ -1458,9 +1470,9 @@ static int irc_368(struct link_server *server, struct line *l)
 		if (link->who_client->who_count > 0) {
 			--link->who_client->who_count;
 			mylog(LOG_DEBUG,
-				"RPL_ENDOFBANLIST: "
-				"Decrementing who count for %p: %d",
-				link->who_client, link->who_client->who_count);
+			      "RPL_ENDOFBANLIST: "
+			      "Decrementing who count for %p: %d",
+			      link->who_client, link->who_client->who_count);
 		}
 	}
 
@@ -1504,8 +1516,8 @@ static int irc_part(struct link_server *server, struct line *line)
 
 	if (origin_is_me(line, server)) {
 		log_part(LINK(server)->log, line->origin, s_chan,
-			irc_line_count(line) == 3 ? irc_line_elem(line, 2) :
-				NULL);
+			 irc_line_count(line) == 3 ? irc_line_elem(line, 2)
+						   : NULL);
 		log_reset_store(LINK(server)->log, s_chan);
 		log_drop(LINK(server)->log, s_chan);
 
@@ -1525,8 +1537,7 @@ static int irc_part(struct link_server *server, struct line *line)
 	free(s_nick);
 
 	log_part(LINK(server)->log, line->origin, s_chan,
-			irc_line_count(line) == 3 ?
-				irc_line_elem(line, 2) : NULL);
+		 irc_line_count(line) == 3 ? irc_line_elem(line, 2) : NULL);
 
 	return OK_COPY;
 }
@@ -1550,8 +1561,8 @@ static void mode_remove_letter(struct link_server *s, char c)
 			for (; i < s->user_mode_len - 1; i++)
 				s->user_mode[i] = s->user_mode[i + 1];
 			s->user_mode_len--;
-			s->user_mode = bip_realloc(s->user_mode,
-					s->user_mode_len);
+			s->user_mode =
+				bip_realloc(s->user_mode, s->user_mode_len);
 			return;
 		}
 	}
@@ -1594,8 +1605,8 @@ static int irc_mode(struct link_server *server, struct line *line)
 		if (irc_line_includes(line, 3))
 			mode_args = array_extract(&line->words, 3, -1);
 		log_mode(LINK(server)->log, line->origin,
-				irc_line_elem(line, 1), irc_line_elem(line, 2),
-				mode_args);
+			 irc_line_elem(line, 1), irc_line_elem(line, 2),
+			 mode_args);
 		if (mode_args)
 			array_free(mode_args);
 		irc_user_mode(server, line);
@@ -1615,7 +1626,7 @@ static int irc_mode(struct link_server *server, struct line *line)
 	if (irc_line_includes(line, 3))
 		mode_args = array_extract(&line->words, 3, -1);
 	log_mode(LINK(server)->log, line->origin, irc_line_elem(line, 1),
-			irc_line_elem(line, 2), mode_args);
+		 irc_line_elem(line, 2), mode_args);
 	if (mode_args)
 		array_free(mode_args);
 
@@ -1636,26 +1647,31 @@ static int irc_mode(struct link_server *server, struct line *line)
 			// Check if mode is known: first user modes then
 			// server modes
 			if (!(str = strchr(server->usermodes, *mode))) {
-				array_each(&server->chanmodes, i, str) {
+				array_each(&server->chanmodes, i, str)
+				{
 					if ((str = strchr(str, *mode)))
 						break;
 				}
 			}
 
 			if (str) {
-				// Usermodes, types A & B always take a parameter
-				// Type C take a parameter only when set
+				// Usermodes, types A & B always take a
+				// parameter Type C take a parameter only when
+				// set
 				if (i <= 1 || (i == 2 && add)) {
-					if (!irc_line_includes(line, cur_arg + 3)) {
+					if (!irc_line_includes(line,
+							       cur_arg + 3)) {
 						return ERR_PROTOCOL;
 					} else {
-						ret = irc_mode_channel(server, channel, line, mode,
-								add, cur_arg);
+						ret = irc_mode_channel(
+							server, channel, line,
+							mode, add, cur_arg);
 						cur_arg++;
 					}
 				} else {
-					ret = irc_mode_channel(server, channel, line, mode, add,
-							cur_arg);
+					ret = irc_mode_channel(server, channel,
+							       line, mode, add,
+							       cur_arg);
 				}
 			}
 		}
@@ -1666,7 +1682,8 @@ static int irc_mode(struct link_server *server, struct line *line)
 }
 
 static int irc_mode_channel(struct link_server *s, struct channel *channel,
-				struct line *line, const char* mode, int add, int cur_arg)
+			    struct line *line, const char *mode, int add,
+			    int cur_arg)
 {
 	const char *nick;
 	long int ovmask;
@@ -1674,8 +1691,8 @@ static int irc_mode_channel(struct link_server *s, struct channel *channel,
 
 	if (*mode == 'k') {
 		if (add) {
-			channel->key = bip_strdup(
-				irc_line_elem(line, cur_arg + 3));
+			channel->key =
+				bip_strdup(irc_line_elem(line, cur_arg + 3));
 		} else {
 			if (channel->key) {
 				free(channel->key);
@@ -1738,7 +1755,7 @@ static int irc_topic(struct link_server *server, struct line *line)
 	channel->create_ts = irc_timestamp();
 
 	log_topic(LINK(server)->log, line->origin, irc_line_elem(line, 1),
-			topic);
+		  topic);
 	return OK_COPY;
 }
 
@@ -1760,19 +1777,19 @@ static int irc_kick(struct link_server *server, struct line *line)
 	if (strcasecmp(irc_line_elem(line, 2), server->nick) == 0) {
 		/* we get kicked !! */
 		log_kick(LINK(server)->log, line->origin, channel->name,
-				irc_line_elem(line, 2),
-				irc_line_count(line) == 4 ?
-					irc_line_elem(line, 3) : NULL);
+			 irc_line_elem(line, 2),
+			 irc_line_count(line) == 4 ? irc_line_elem(line, 3)
+						   : NULL);
 		log_reset_store(LINK(server)->log, channel->name);
 		log_drop(LINK(server)->log, channel->name);
 
 		if (LINK(server)->autojoin_on_kick) {
 			if (!channel->key)
 				WRITE_LINE1(CONN(server), NULL, "JOIN",
-						channel->name);
+					    channel->name);
 			else
 				WRITE_LINE2(CONN(server), NULL, "JOIN",
-						channel->name, channel->key);
+					    channel->name, channel->key);
 		}
 
 		hash_remove(&server->channels, channel->name);
@@ -1782,8 +1799,8 @@ static int irc_kick(struct link_server *server, struct line *line)
 
 	hash_remove(&channel->ovmasks, irc_line_elem(line, 2));
 	log_kick(LINK(server)->log, line->origin, irc_line_elem(line, 1),
-		irc_line_elem(line, 2),
-		irc_line_count(line) == 4 ? irc_line_elem(line, 3) : NULL);
+		 irc_line_elem(line, 2),
+		 irc_line_count(line) == 4 ? irc_line_elem(line, 3) : NULL);
 
 
 	return OK_COPY;
@@ -1802,7 +1819,7 @@ static void irc_privmsg_check_ctcp(struct link_server *server,
 	nick = nick_from_ircmask(line->origin);
 	if (irc_line_elem_equals(line, 2, "\001VERSION\001")) {
 		WRITE_LINE2(CONN(server), NULL, "NOTICE", nick,
-				"\001VERSION bip-" PACKAGE_VERSION "\001");
+			    "\001VERSION bip-" PACKAGE_VERSION "\001");
 	}
 	free(nick);
 }
@@ -1813,7 +1830,7 @@ static int irc_privmsg(struct link_server *server, struct line *line)
 		return ERR_PROTOCOL;
 	if (LINK(server)->s_state == IRCS_CONNECTED)
 		log_privmsg(LINK(server)->log, line->origin,
-				irc_line_elem(line, 1), irc_line_elem(line, 2));
+			    irc_line_elem(line, 1), irc_line_elem(line, 2));
 	irc_privmsg_check_ctcp(server, line);
 	return OK_COPY;
 }
@@ -1824,7 +1841,7 @@ static int irc_notice(struct link_server *server, struct line *line)
 		return ERR_PROTOCOL;
 	if (LINK(server)->s_state == IRCS_CONNECTED)
 		log_notice(LINK(server)->log, line->origin,
-				irc_line_elem(line, 1), irc_line_elem(line, 2));
+			   irc_line_elem(line, 1), irc_line_elem(line, 2));
 	return OK_COPY;
 }
 
@@ -1850,7 +1867,7 @@ static int irc_nick(struct link_server *server, struct line *line)
 	dst_nick = irc_line_elem(line, 1);
 
 	for (hash_it_init(&server->channels, &hi); hash_it_item(&hi);
-			hash_it_next(&hi)) {
+	     hash_it_next(&hi)) {
 		channel = hash_it_item(&hi);
 		if (!hash_includes(&channel->ovmasks, org_nick))
 			continue;
@@ -1861,10 +1878,10 @@ static int irc_nick(struct link_server *server, struct line *line)
 	if (origin_is_me(line, server)) {
 		free(server->nick);
 		server->nick = bip_strdup(dst_nick);
-		if (LINK(server)->follow_nick &&
-				(LINK(server)->away_nick == NULL ||
-				strcmp(server->nick, LINK(server)->away_nick))
-				!= 0) {
+		if (LINK(server)->follow_nick
+		    && (LINK(server)->away_nick == NULL
+			|| strcmp(server->nick, LINK(server)->away_nick))
+			       != 0) {
 			free(LINK(server)->connect_nick);
 			LINK(server)->connect_nick = bip_strdup(server->nick);
 		}
@@ -1887,14 +1904,14 @@ static int irc_generic_quit(struct link_server *server, struct line *line)
 		return ERR_PROTOCOL;
 	s_nick = nick_from_ircmask(line->origin);
 	for (hash_it_init(&server->channels, &hi); hash_it_item(&hi);
-			hash_it_next(&hi)) {
+	     hash_it_next(&hi)) {
 		channel = hash_it_item(&hi);
 		if (!hash_includes(&channel->ovmasks, s_nick))
 			continue;
 		hash_remove(&channel->ovmasks, s_nick);
 		log_quit(LINK(server)->log, line->origin, channel->name,
-			irc_line_includes(line, 1) ?
-				irc_line_elem(line, 1) : NULL);
+			 irc_line_includes(line, 1) ? irc_line_elem(line, 1)
+						    : NULL);
 	}
 	free(s_nick);
 	return OK_COPY;
@@ -1953,7 +1970,7 @@ static void irc_server_startup(struct link_server *ircs)
 		nick = bip_strdup(LINK(ircs)->away_nick);
 	}
 	if ((!LINK(ircs)->follow_nick && !LINK(ircs)->away_nick)
-			|| nick == NULL) {
+	    || nick == NULL) {
 		if (nick)
 			free(nick);
 		if (!LINK(ircs)->connect_nick)
@@ -2008,7 +2025,7 @@ void server_cleanup(struct link_server *server)
 
 	hash_iterator_t hi;
 	for (hash_it_init(&server->channels, &hi); hash_it_item(&hi);
-			hash_it_next(&hi))
+	     hash_it_next(&hi))
 		channel_free(hash_it_item(&hi));
 	hash_clean(&server->channels);
 
@@ -2028,10 +2045,10 @@ void irc_client_close(struct link_client *ic)
 		if (LINK(ic)->l_clientc == 0) {
 			if (is && LINK(ic)->away_nick)
 				WRITE_LINE1(CONN(is), NULL, "NICK",
-						LINK(ic)->away_nick);
+					    LINK(ic)->away_nick);
 			if (is && LINK(ic)->no_client_away_msg)
 				WRITE_LINE1(CONN(is), NULL, "AWAY",
-						LINK(ic)->no_client_away_msg);
+					    LINK(ic)->no_client_away_msg);
 			log_client_none_connected(LINK(ic)->log);
 		}
 		irc_client_free(ic);
@@ -2044,15 +2061,13 @@ static void server_setup_reconnect_timer(struct link *link)
 {
 	int timer = 0;
 
-	if (link->last_connection_attempt &&
-			time(NULL) - link->last_connection_attempt
-				< CONN_INTERVAL) {
+	if (link->last_connection_attempt
+	    && time(NULL) - link->last_connection_attempt < CONN_INTERVAL) {
 		timer = conf_reconn_timer * (link->s_conn_attempt);
 		if (timer > RECONN_TIMER_MAX)
 			timer = RECONN_TIMER_MAX;
 	}
-	mylog(LOG_ERROR, "[%s] reconnecting in %d seconds", link->name,
-			timer);
+	mylog(LOG_ERROR, "[%s] reconnecting in %d seconds", link->name, timer);
 	link->recon_timer = timer;
 }
 
@@ -2140,15 +2155,14 @@ void irc_server_free(struct link_server *s)
 
 	int i;
 	char *ptr;
-	array_each(&s->chanmodes, i, ptr)
-		free(ptr);
+	array_each(&s->chanmodes, i, ptr) free(ptr);
 
 	MAYFREE(s->prefixes);
 	MAYFREE(s->usermodes);
 
 	hash_iterator_t hi;
 	for (hash_it_init(&s->channels, &hi); hash_it_item(&hi);
-			hash_it_next(&hi)) {
+	     hash_it_next(&hi)) {
 		struct channel *chan = hash_it_item(&hi);
 		channel_free(chan);
 	}
@@ -2226,8 +2240,7 @@ void irc_server_shutdown(struct link_server *s)
 {
 	int i;
 	char *cur;
-	array_each(&s->chanmodes, i, cur)
-		free(cur);
+	array_each(&s->chanmodes, i, cur) free(cur);
 	array_deinit(&s->chanmodes);
 
 	server_init_modes(s);
@@ -2259,7 +2272,7 @@ void oidentd_dump(bip_t *bip)
 			fchmod(fileno(f), 0644);
 		} else {
 			mylog(LOG_WARN, "Can't open/create %s",
-					bip->oidentdpath);
+			      bip->oidentdpath);
 			return;
 		}
 	} else {
@@ -2269,16 +2282,16 @@ void oidentd_dump(bip_t *bip)
 
 		if (!f) {
 			mylog(LOG_WARN, "Can't open/create %s",
-					bip->oidentdpath);
+			      bip->oidentdpath);
 			return;
 		}
 
 		content = (char *)bip_malloc(stats.st_size + 1);
 
-		if (fread(content, 1, stats.st_size, f) !=
-				(size_t)stats.st_size) {
+		if (fread(content, 1, stats.st_size, f)
+		    != (size_t)stats.st_size) {
 			mylog(LOG_WARN, "Can't read %s fully",
-					bip->oidentdpath);
+			      bip->oidentdpath);
 			free(content);
 			goto clean_oidentd;
 		}
@@ -2293,7 +2306,7 @@ void oidentd_dump(bip_t *bip)
 			fseek(f, SEEK_SET, 0);
 			if (ftruncate(fileno(f), 0) == -1) {
 				mylog(LOG_DEBUG, "Can't reset %s size",
-						bip->oidentdpath);
+				      bip->oidentdpath);
 				free(content);
 				goto clean_oidentd;
 			}
@@ -2306,30 +2319,29 @@ void oidentd_dump(bip_t *bip)
 			/* data following the tag, if any */
 			if (bipend != NULL)
 				fwrite(bipend + BIP_OIDENTD_END_LENGTH, 1,
-						stats.st_size -
-						(bipend - content) -
-						BIP_OIDENTD_END_LENGTH, f);
+				       stats.st_size - (bipend - content)
+					       - BIP_OIDENTD_END_LENGTH,
+				       f);
 			else
 				mylog(LOG_WARN, "No %s mark found in %s",
-						BIP_OIDENTD_END,
-						bip->oidentdpath);
+				      BIP_OIDENTD_END, bip->oidentdpath);
 		} else {
 			/* No previous conf */
-			if (stats.st_size != 0 &&
-					content[stats.st_size - 1] != '\n')
+			if (stats.st_size != 0
+			    && content[stats.st_size - 1] != '\n')
 				fprintf(f, "\n");
 		}
 		free(content);
 	}
 
 	for (list_it_init(&bip->conn_list, &it); list_it_item(&it);
-			list_it_next(&it)) {
+	     list_it_next(&it)) {
 		connection_t *c = list_it_item(&it);
 		struct link_any *la = c->user_data;
-		if (la && TYPE(la) == IRC_TYPE_SERVER && (
-				c->connected == CONN_OK ||
-				c->connected == CONN_SSL_CONNECT ||
-				c->connected == CONN_UNTRUSTED)) {
+		if (la && TYPE(la) == IRC_TYPE_SERVER
+		    && (c->connected == CONN_OK
+			|| c->connected == CONN_SSL_CONNECT
+			|| c->connected == CONN_UNTRUSTED)) {
 			struct link_server *ls;
 			struct link *l;
 
@@ -2338,12 +2350,12 @@ void oidentd_dump(bip_t *bip)
 				tag_written = 1;
 			}
 
-			ls = (struct link_server*)la;
+			ls = (struct link_server *)la;
 			l = LINK(ls);
 
 			fprintf(f, "to %s fport %d from %s lport %d {\n",
-					c->remoteip, c->remoteport, c->localip,
-					c->localport);
+				c->remoteip, c->remoteport, c->localip,
+				c->localport);
 			fprintf(f, "\treply \"%s\"\n", l->username);
 			fprintf(f, "}\n");
 		}
@@ -2363,12 +2375,14 @@ void timeout_clean_who_counts(list_t *conns)
 		struct link_client *client = l->who_client;
 
 		if (client && client->whoc_tstamp) {
-			mylog(LOG_DEBUG, "timeout_clean_who_counts: %p %p", l, client);
+			mylog(LOG_DEBUG, "timeout_clean_who_counts: %p %p", l,
+			      client);
 			time_t now;
 			now = time(NULL);
 			if (now - client->whoc_tstamp > 10) {
-				mylog(LOG_DEBUG, "Yawn, "
-						"forgetting one who reply");
+				mylog(LOG_DEBUG,
+				      "Yawn, "
+				      "forgetting one who reply");
 				if (client->who_count > 0)
 					--client->who_count;
 				client->whoc_tstamp = time(NULL);
@@ -2405,13 +2419,13 @@ void bip_tick(bip_t *bip)
 
 	/* handle tick for links: detect lags or start a reconnection */
 	for (list_it_init(&bip->link_list, &li); (link = list_it_item(&li));
-			list_it_next(&li)) {
+	     list_it_next(&li)) {
 		if (link->l_server) {
 			if (irc_server_lag_compute(link)) {
 				log_ping_timeout(link->log);
 				list_remove(&bip->conn_list,
-						CONN(link->l_server));
-				irc_close((struct link_any *) link->l_server);
+					    CONN(link->l_server));
+				irc_close((struct link_any *)link->l_server);
 			}
 		} else {
 			if (link->recon_timer == 0) {
@@ -2428,7 +2442,7 @@ void bip_tick(bip_t *bip)
 
 	/* drop lagging connecting client */
 	for (list_it_init(&bip->connecting_client_list, &li); list_it_item(&li);
-			list_it_next(&li)) {
+	     list_it_next(&li)) {
 		struct link_client *ic = list_it_item(&li);
 		ic->logging_timer++;
 		if (ic->logging_timer > LOGGING_TIMEOUT) {
@@ -2465,7 +2479,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 	if (err) {
 		if (TYPE(lc) == IRC_TYPE_SERVER) {
 			mylog(LOG_ERROR, "[%s] read_lines error, closing...",
-					link_name(lc));
+			      link_name(lc));
 			irc_server_shutdown(LINK(lc)->l_server);
 		} else {
 			mylog(LOG_ERROR, "client read_lines error, closing...");
@@ -2487,7 +2501,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 		line = irc_line_new_from_string(line_s);
 		if (!line) {
 			mylog(LOG_ERROR, "[%s] Error in protocol, closing...",
-					link_name(lc));
+			      link_name(lc));
 			free(line_s);
 			goto prot_err_lines;
 		}
@@ -2497,7 +2511,7 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 		free(line_s);
 		if (r == ERR_PROTOCOL) {
 			mylog(LOG_ERROR, "[%s] Error in protocol, closing...",
-					link_name(lc));
+			      link_name(lc));
 			goto prot_err_lines;
 		}
 		if (r == ERR_AUTH)
@@ -2505,7 +2519,6 @@ void bip_on_event(bip_t *bip, connection_t *conn)
 		/* XXX: not real error */
 		if (r == OK_CLOSE)
 			goto prot_err_lines;
-
 	}
 	list_free(linel);
 	return;
@@ -2688,8 +2701,7 @@ static void server_set_chanmodes(struct link_server *l, const char *modes)
 
 	mylog(LOG_DEBUG, "[%s] Set chanmodes", LINK(l)->name);
 
-	array_each(&l->chanmodes, i, cur)
-		free(cur);
+	array_each(&l->chanmodes, i, cur) free(cur);
 	array_deinit(&l->chanmodes);
 
 	// handle four categories, ignore all others
@@ -2717,7 +2729,7 @@ static void server_set_chanmodes(struct link_server *l, const char *modes)
 
 static void server_set_prefix(struct link_server *s, const char *modes)
 {
-	char * end_mode;
+	char *end_mode;
 	unsigned int len;
 
 	mylog(LOG_DEBUG, "[%s] Set user modes", LINK(s)->name);
@@ -2726,30 +2738,36 @@ static void server_set_prefix(struct link_server *s, const char *modes)
 
 	end_mode = strchr(modes + 1, ')'); // skip '('
 	if (*modes != '(' || !end_mode) {
-		mylog(LOG_WARN, "[%s] Unable to parse PREFIX parameter", LINK(s)->name);
+		mylog(LOG_WARN, "[%s] Unable to parse PREFIX parameter",
+		      LINK(s)->name);
 		return;
 	}
 
 	len = end_mode - modes - 1; // len of mode without '('
 	if (len * 2 + 2 != strlen(modes)) {
-		mylog(LOG_WARN, "[%s] Unable to parse PREFIX parameter", LINK(s)->name);
+		mylog(LOG_WARN, "[%s] Unable to parse PREFIX parameter",
+		      LINK(s)->name);
 		return;
 	}
 
-	s->prefixes = bip_realloc(s->prefixes, sizeof(*s->prefixes) * (len + 1));
-	s->usermodes = bip_realloc(s->usermodes, sizeof(s->usermodes) * (len + 1));
+	s->prefixes =
+		bip_realloc(s->prefixes, sizeof(*s->prefixes) * (len + 1));
+	s->usermodes =
+		bip_realloc(s->usermodes, sizeof(s->usermodes) * (len + 1));
 
 	memcpy(s->usermodes, modes + 1, len);
 	s->usermodes[len] = 0;
 	memcpy(s->prefixes, end_mode + 1, len);
 	s->prefixes[len] = 0;
 
-	mylog(LOG_DEBUGVERB, "[%s] user prefix: '%s'", LINK(s)->name, s->prefixes);
-	mylog(LOG_DEBUGVERB, "[%s] user modes: '%s'", LINK(s)->name, s->usermodes);
+	mylog(LOG_DEBUGVERB, "[%s] user prefix: '%s'", LINK(s)->name,
+	      s->prefixes);
+	mylog(LOG_DEBUGVERB, "[%s] user modes: '%s'", LINK(s)->name,
+	      s->usermodes);
 }
 
 // Return the position (*1 based*) of car in str, else -1
-static int bip_get_index(const char* str, char car)
+static int bip_get_index(const char *str, char car)
 {
 	char *cur;
 	if ((cur = strchr(str, car)))

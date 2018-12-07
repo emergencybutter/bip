@@ -92,10 +92,10 @@ int is_valid_nick(char *str)
 		return 0;
 
 	tmp = str;
-	while (*tmp != '\0' && (isalnum(*tmp) || *tmp == '-' || *tmp == '[' ||
-			*tmp == ']' || *tmp == '\\' || *tmp == '`' ||
-			*tmp == '^' || *tmp == '{' || *tmp == '}' ||
-			*tmp == '|' || *tmp == '_' ))
+	while (*tmp != '\0'
+	       && (isalnum(*tmp) || *tmp == '-' || *tmp == '[' || *tmp == ']'
+		   || *tmp == '\\' || *tmp == '`' || *tmp == '^' || *tmp == '{'
+		   || *tmp == '}' || *tmp == '|' || *tmp == '_'))
 		tmp++;
 	return (*tmp == '\0');
 }
@@ -107,8 +107,8 @@ int is_valid_username(char *str)
 		return 0;
 
 	tmp = str;
-	while (*tmp != '\0' && *tmp != ' ' && *tmp != '\0' && *tmp != '\r' &&
-			*tmp != '\n')
+	while (*tmp != '\0' && *tmp != ' ' && *tmp != '\0' && *tmp != '\r'
+	       && *tmp != '\n')
 		tmp++;
 	return (*tmp == '\0');
 }
@@ -123,8 +123,8 @@ char *timestamp(void)
 	tm = localtime(&tv);
 
 	snprintf(ts, 20, "%02d-%02d-%04d %02d:%02d:%02d", tm->tm_mday,
-			tm->tm_mon + 1, tm->tm_year + 1900, tm->tm_hour,
-			tm->tm_min, tm->tm_sec);
+		 tm->tm_mon + 1, tm->tm_year + 1900, tm->tm_hour, tm->tm_min,
+		 tm->tm_sec);
 	return ts;
 }
 
@@ -138,8 +138,8 @@ char *hrtime(time_t s)
 	tm = localtime(&s);
 
 	snprintf(ts, 20, "%02d-%02d-%04d %02d:%02d:%02d", tm->tm_mday,
-			tm->tm_mon + 1, tm->tm_year + 1900, tm->tm_hour,
-			tm->tm_min, tm->tm_sec);
+		 tm->tm_mon + 1, tm->tm_year + 1900, tm->tm_hour, tm->tm_min,
+		 tm->tm_sec);
 	return ts;
 }
 
@@ -168,27 +168,27 @@ void _mylog(int level, char *fmt, va_list ap)
 		return;
 
 	switch (level) {
-		case LOG_FATAL:
-			prefix = "FATAL: ";
-			break;
-		case LOG_DEBUGVERB:
-			prefix = "DEBUGVERB: ";
-			break;
-		case LOG_DEBUG:
-			prefix = "DEBUG: ";
-			break;
-		case LOG_ERROR:
-			prefix = "ERROR: ";
-			break;
-		case LOG_WARN:
-			prefix = "WARNING: ";
-			break;
-		case LOG_INFO:
-			prefix = "";
-			break;
-		default:
-			prefix = "";
-			break;
+	case LOG_FATAL:
+		prefix = "FATAL: ";
+		break;
+	case LOG_DEBUGVERB:
+		prefix = "DEBUGVERB: ";
+		break;
+	case LOG_DEBUG:
+		prefix = "DEBUG: ";
+		break;
+	case LOG_ERROR:
+		prefix = "ERROR: ";
+		break;
+	case LOG_WARN:
+		prefix = "WARNING: ";
+		break;
+	case LOG_INFO:
+		prefix = "";
+		break;
+	default:
+		prefix = "";
+		break;
 	}
 
 	fprintf(conf_global_log_file, "%s %s", timestamp(), prefix);
@@ -474,8 +474,9 @@ void list_free(list_t *t)
 	free(t);
 }
 
-void list_clean(list_t *l) {
-	while(list_remove_first(l))
+void list_clean(list_t *l)
+{
+	while (list_remove_first(l))
 		;
 }
 
@@ -525,13 +526,13 @@ void hash_init(hash_t *h, int options)
 		switch (options) {
 		case HASH_NOCASE:
 			list_init(&h->lists[i],
-				(int (*)(const void*, const void*))
-					hash_item_nocase_cmp);
+				  (int (*)(const void *,
+					   const void *))hash_item_nocase_cmp);
 			break;
 		case HASH_DEFAULT:
 			list_init(&h->lists[i],
-				(int (*)(const void*,const void*))
-					hash_item_cmp);
+				  (int (*)(const void *,
+					   const void *))hash_item_cmp);
 			break;
 		default:
 			fatal("wrong hash option %d", options);
@@ -718,7 +719,7 @@ void hash_dump(hash_t *h)
 {
 	hash_iterator_t it;
 	assert(h);
-	for (hash_it_init(h, &it); hash_it_key(&it) ;hash_it_next(&it))
+	for (hash_it_init(h, &it); hash_it_key(&it); hash_it_next(&it))
 		printf("%s => %p\n", hash_it_key(&it), hash_it_item(&it));
 }
 
