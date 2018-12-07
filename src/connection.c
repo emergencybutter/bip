@@ -312,7 +312,6 @@ void real_read_all(connection_t *cn)
 #endif
 		ret = read_socket(cn);
 	if (!cn_is_connected(cn)) {
-		log(LOG_ERROR, "lol: %d", cn->connected);
 		return;
 	}
 
