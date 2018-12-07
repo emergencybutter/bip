@@ -25,7 +25,7 @@ void init_test()
 struct irc_test_server;
 
 typedef struct irc_test_server_client_state {
-	connection_t* connection;
+	connection_t *connection;
 	int replay_line;
 	array_t *replay_lines;
 	struct irc_test_server *server;
@@ -49,12 +49,14 @@ char *irc_test_server_client_state_current_line(
 	return array_get(client_state->replay_lines, client_state->replay_line);
 }
 
-void irc_test_server_init(irc_test_server_t* server, int ssl) {
+void irc_test_server_init(irc_test_server_t *server, int ssl)
+{
 	listener_ssl_options_t options;
 	listener_ssl_options_init(&options);
 	options.cert_pem_file = "bip.test.pem";
 	array_init(&server->clients);
-	listener_init(&server->listener, "127.0.0.1", 6667, ssl ? &options : NULL);
+	listener_init(&server->listener, "127.0.0.1", 6667,
+		      ssl ? &options : NULL);
 	array_init(&server->client_replay_lines);
 	server->ssl = ssl;
 }
@@ -134,23 +136,27 @@ void irc_test_server_process(irc_test_server_t *server)
 }
 
 typedef struct irc_test_client {
-	connection_t* connection;
+	connection_t *connection;
 	array_t proxy_replay_lines;
 	int proxy_replay_line;
 } irc_test_client_t;
 
-void irc_test_client_init(irc_test_client_t*client) {
+void irc_test_client_init(irc_test_client_t *client)
+{
 	array_init(&client->proxy_replay_lines);
 	client->proxy_replay_line = 0;
-	client->connection = connection_new("127.0.0.1", 7777, NULL, 0, NULL, 100);
+	client->connection =
+		connection_new("127.0.0.1", 7777, NULL, 0, NULL, 100);
 }
 
 char *irc_test_client_current_line(irc_test_client_t *client)
 {
-	if (client->proxy_replay_line >= array_count(&client->proxy_replay_lines)) {
+	if (client->proxy_replay_line
+	    >= array_count(&client->proxy_replay_lines)) {
 		return NULL;
 	}
-	return array_get(&client->proxy_replay_lines, client->proxy_replay_line);
+	return array_get(&client->proxy_replay_lines,
+			 client->proxy_replay_line);
 }
 
 void irc_test_client_process(irc_test_client_t *client)
@@ -224,7 +230,8 @@ void set_up_bip(bip_t *bip, int server_ssl)
 	l->network = n;
 }
 
-void test_proxy_connects_opts(int server_ssl) {
+void test_proxy_connects_opts(int server_ssl)
+{
 
 	bip_t bip;
 	bip_init(&bip);
