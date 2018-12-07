@@ -2157,17 +2157,19 @@ void irc_server_free(struct link_server *s)
 	free(s);
 }
 
-connection_t *irc_server_connect(bip_t* bip, struct link *link)
+connection_t *irc_server_connect(bip_t *bip, struct link *link)
 {
 	struct link_server *ls;
 	connection_t *conn;
 
 	link->s_conn_attempt++;
 
-	mylog(LOG_INFO, "[%s] Connecting user '%s' using server "
-		"%s:%d", link->name, link->user->name,
-		link->network->serverv[link->cur_server].host,
-		link->network->serverv[link->cur_server].port);
+	mylog(LOG_INFO,
+	      "[%s] Connecting user '%s' using server "
+	      "%s:%d",
+	      link->name, link->user->name,
+	      link->network->serverv[link->cur_server].host,
+	      link->network->serverv[link->cur_server].port);
 #ifdef HAVE_LIBSSL
 	connection_ssl_options_t options;
 	connection_ssl_options_init(&options);
@@ -2177,14 +2179,14 @@ connection_t *irc_server_connect(bip_t* bip, struct link *link)
 	options.ssl_client_certfile = link->user->ssl_client_certfile;
 #endif
 	conn = connection_new(link->network->serverv[link->cur_server].host,
-				link->network->serverv[link->cur_server].port,
-				link->vhost, link->bind_port,
+			      link->network->serverv[link->cur_server].port,
+			      link->vhost, link->bind_port,
 #ifdef HAVE_LIBSSL
-				link->network->ssl ? &options : NULL,
+			      link->network->ssl ? &options : NULL,
 #else
-				NULL,
+			      NULL,
 #endif
-				CONNECT_TIMEOUT);
+			      CONNECT_TIMEOUT);
 	assert(conn);
 	if (conn->handle == -1) {
 		mylog(LOG_INFO, "[%s] Cannot connect.", link->name);
@@ -2326,7 +2328,7 @@ void oidentd_dump(bip_t *bip)
 		struct link_any *la = c->user_data;
 		if (la && TYPE(la) == IRC_TYPE_SERVER && (
 				c->connected == CONN_OK ||
-				c->connected == CONN_NEED_SSLIZE ||
+				c->connected == CONN_SSL_CONNECT ||
 				c->connected == CONN_UNTRUSTED)) {
 			struct link_server *ls;
 			struct link *l;
@@ -2567,6 +2569,7 @@ void irc_one_shot(bip_t *bip, int timeleft)
 		list_add_last(&connections_with_lines, conn);
 	}
 	while ((conn = list_remove_first(&connections_with_lines))) {
+		log(LOG_ERROR, "bip_on_event %d", conn->handle);
 		bip_on_event(bip, conn);
 	}
 }

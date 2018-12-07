@@ -141,19 +141,26 @@ void connection_free(connection_t *cn)
 }
 
 #ifdef HAVE_LIBSSL
-static void connection_client_ssl_connect(connection_t *cn)
+// Turns either a new client or a newly accepted socket to an SSL socket.
+static void connection_sslize(connection_t *cn)
 {
+	log(LOG_ERROR, "fd: %d, connection_sslize", cn->handle);
+
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
 	int err;
-	mylog(LOG_ERROR, "client: %d", cn->ssl_client);
 	if (cn->ssl_client) {
+		log(LOG_ERROR, "fd: %d, connect", cn->handle);
 		err = SSL_connect(cn->ssl_h);
 	} else {
+		log(LOG_ERROR, "fd: %d, accept", cn->handle);
 		err = SSL_accept(cn->ssl_h);
 	}
 	int ssl_err = 0;
-	switch (ssl_err = SSL_get_error(cn->ssl_h, err)) {
+	ssl_err = SSL_get_error(cn->ssl_h, err);
+	log(LOG_DEBUG, "fd: %d, ssl_err: %d (SSL_ERROR_WANT_READ: %d)",
+	    cn->handle, ssl_err, SSL_ERROR_WANT_READ);
+	switch (ssl_err) {
 	case SSL_ERROR_WANT_READ:
 		descriptor_set_events(descriptor, POLLER_IN);
 		descriptor_unset_events(descriptor, POLLER_OUT);
@@ -164,11 +171,14 @@ static void connection_client_ssl_connect(connection_t *cn)
 		break;
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SSL:
-	case SSL_ERROR_SYSCALL:
-		mylog(LOG_ERROR, "Error in SSL handshake.");
+	case SSL_ERROR_SYSCALL: {
+		char buf[256];
+		mylog(LOG_ERROR, "Error in SSL handshake. %s",
+		      ERR_error_string(ssl_err, buf));
 		connection_close(cn);
 		cn->connected = CONN_ERROR;
 		break;
+	}
 	case SSL_ERROR_NONE: {
 		const SSL_CIPHER *cipher;
 		char buf[128];
@@ -179,11 +189,14 @@ static void connection_client_ssl_connect(connection_t *cn)
 		len = strlen(buf);
 		if (len > 0)
 			buf[len - 1] = '\0';
-		mylog(LOG_DEBUG, "Negociated ciphers: %s", buf);
-		mylog(LOG_DEBUG, "ssl_check_mode: %d", cn->ssl_check_mode);
+		log(LOG_DEBUG, "fd: %d, Negociated ciphers: %s", cn->handle,
+		    buf);
+		log(LOG_DEBUG, "fd: %d, ssl_check_mode: %d", cn->handle,
+		    cn->ssl_check_mode);
 
 		switch (cn->ssl_check_mode) {
 		case SSL_CHECK_NONE:
+			log(LOG_DEBUG, "fd: %d, connected (SSL)", cn->handle);
 			cn->connected = CONN_OK;
 			descriptor_set_events(descriptor, POLLER_IN);
 			descriptor_unset_events(descriptor, POLLER_OUT);
@@ -221,21 +234,23 @@ static void connection_client_ssl_connect(connection_t *cn)
 		default:
 			fatal("Unknown ssl_check_mode");
 		}
-	} break;
+		break;
+	}
 	default: {
 		char buf[256];
 		ERR_error_string_n(ssl_err, buf, 255);
 		buf[255] = 0;
 		fatal("Unknown SSL Error: %d, %d, %s", err, ssl_err, buf);
-	} break;
+		break;
 	}
+	} // switch
 }
 #endif
 
 static void listener_on_in(void *data)
 {
 	listener_t *listener = data;
-	log(LOG_DEBUG, "listener_on_in: %d", listener->handle);
+	log(LOG_DEBUG, "fd: %d, listener_on_in", listener->handle);
 	connection_t *connection = accept_new(listener);
 	assert(connection != NULL);
 	list_add_last(&listener->accepted_connections, connection);
@@ -245,23 +260,24 @@ static void listener_on_in(void *data)
 static void listener_on_out(void *data)
 {
 	listener_t *listener = data;
-	log(LOG_DEBUG, "listener_on_out: %d", listener->handle);
+	log(LOG_DEBUG, "fd: %d, listener_on_out", listener->handle);
 }
 
 static void listener_on_hup(void *data)
 {
 	listener_t *listener = data;
-	log(LOG_DEBUG, "on_hup: %d", listener->handle);
+	log(LOG_DEBUG, "fd: %d, on_hup", listener->handle);
 }
 
 static void connection_client_on_in(void *data)
 {
 	connection_t *cn = data;
-	log(LOG_DEBUG, "connection_client_on_in: %d", cn->handle);
+	log(LOG_DEBUG, "fd: %d, connection_client_on_in connected: %d", cn->handle,
+	    cn->connected);
 	switch (cn->connected) {
 #ifdef HAVE_LIBSSL
 	case CONN_SSL_CONNECT:
-		connection_client_ssl_connect(cn);
+		connection_sslize(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_WRITE:
 		assert(cn->ssl_ctx_h);
@@ -275,7 +291,7 @@ static void connection_client_on_in(void *data)
 #endif
 	case CONN_OK:
 		real_read_all(cn);
-		log(LOG_DEBUG, "num lines after read: %d %d", cn->handle,
+		log(LOG_DEBUG, "fd: %d, num lines after read: %d", cn->handle,
 		    list_count(cn->incoming_lines));
 		break;
 	default:
@@ -293,19 +309,21 @@ void real_read_all(connection_t *cn)
 #endif
 		ret = read_socket(cn);
 	if (!cn_is_connected(cn)) {
+		log(LOG_ERROR, "lol: %d", cn->connected);
 		return;
 	}
 
 	if (cn->incoming_lines == NULL)
 		cn->incoming_lines = list_new(list_ptr_cmp);
 	data_find_lines(cn);
+	log(LOG_ERROR, "incoming: %d", list_count(cn->incoming_lines));
 	maybe_trigger_read_event(cn);
 }
 
 static void connection_client_on_out(void *data)
 {
 	connection_t *cn = data;
-	mylog(LOG_DEBUG, "connection_client_on_out: fd: %d (%d)", cn->handle, cn->connected);
+	log(LOG_DEBUG, "fd: %d, connection_client_on_out: (connected: %d)", cn->handle, cn->connected);
 
 	if (cn_is_in_error(cn)) {
 		mylog(LOG_ERROR, "Error on fd %d (state %d)", cn->handle,
@@ -329,20 +347,19 @@ static void connection_client_on_out(void *data)
 			connecting_data_free(cn->connecting_data);
 			cn->connecting_data = NULL;
 		}
+		log(LOG_DEBUG, "fd: %d, Socket connected (TCP)", cn->handle);
 		connection_save_endpoints(cn);
 #ifdef HAVE_LIBSSL
 		if (cn->ssl_ctx_h) {
 			cn->connected = CONN_SSL_CONNECT;
-			if (cn->ssl_client == 1) {
-				if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
-					mylog(LOG_ERROR,
-					      "unable to associate FD to SSL "
-					      "structure");
-					cn->connected = CONN_ERROR;
-					return;
-				}
-			}
 			// Leave the POLLER_OUT event listener.
+			if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
+				mylog(LOG_ERROR,
+				      "unable to associate FD to SSL "
+				      "structure");
+				cn->connected = CONN_ERROR;
+				return;
+			}
 			break;
 		}
 #endif
@@ -351,17 +368,17 @@ static void connection_client_on_out(void *data)
 		descriptor_set_events(descriptor, POLLER_IN);
 		{
 			char* dbgs = descriptor_dbg_string(descriptor);
-			log(LOG_DEBUG, "Connected: %d %s", cn->handle, dbgs);
+			log(LOG_DEBUG, "fd: %d, Connected: %s", cn->handle, dbgs);
 			free(dbgs);
 		}
 		return;
-	}
+	} 
 	case CONN_OK:
 		real_write_all(cn);
 		break;
 #ifdef HAVE_LIBSSL
 	case CONN_SSL_CONNECT:
-		connection_client_ssl_connect(cn);
+		connection_sslize(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_WRITE:
 		assert(cn->ssl_ctx_h);
@@ -381,7 +398,7 @@ static void connection_client_on_out(void *data)
 static void connection_client_on_hup(void *data)
 {
 	connection_t *cn = data;
-	mylog(LOG_ERROR, "Disconnection. %d\n", cn->handle);
+	mylog(LOG_ERROR, "fd: %d, Disconnection.", cn->handle);
 	connection_close(data);
 }
 
@@ -416,8 +433,6 @@ static void connect_trynext(connection_t *cn)
 
 	cur = cn->connecting_data->cur;
 
-	mylog(LOG_DEBUG, "connect_trynext current fd: %d", cn->handle);
-
 	for (cur = cn->connecting_data->cur; cur; cur = cur->ai_next) {
 		if ((cn->handle = socket(cur->ai_family, cur->ai_socktype,
 					 cur->ai_protocol))
@@ -425,7 +440,6 @@ static void connect_trynext(connection_t *cn)
 			mylog(LOG_WARN, "socket() : %s", strerror(errno));
 			continue;
 		}
-		mylog(LOG_DEBUG, "connect_trynext new fd: %d", cn->handle);
 
 		descriptor_t *descriptor =
 			poller_register(global_poller(), cn->handle);
@@ -457,7 +471,7 @@ static void connect_trynext(connection_t *cn)
 		} else {
 			int port = 0;
 			char *ip = bip_ntop(cur->ai_addr, &port);
-			mylog(LOG_DEBUG, "connect(%s:%d)", ip, port);
+			log(LOG_DEBUG, "fd: %d, connect(%s:%d)", cn->handle, ip, port);
 			free(ip);
 		}
 
@@ -542,11 +556,10 @@ static int _write_socket_SSL(connection_t *cn, char* message)
 	if (count != size) {
 		/* abnormal : openssl keeps writing until message is not fully
 		 * sent */
-		mylog(LOG_DEBUG, "only %d written while message length is %d",
+		log(LOG_DEBUG, "only %d written while message length is %d",
 				count,size);
 	}
 
-	mylog(LOG_DEBUGVERB, "%d/%d bytes sent", count, size);
 	descriptor_unset_events(
 		poller_get_descriptor(global_poller(), cn->handle), POLLER_OUT);
 	return WRITE_OK;
@@ -616,7 +629,7 @@ static int _write_socket(connection_t *cn, char *message)
 		if (count > 0) {
 			tcount += count;
 			if (tcount == size) {
-				log(LOG_DEBUG, "WRITTEN %d: %s", cn->handle, message);
+				log(LOG_DEBUG, "fd: %d, WRITTEN: %s", cn->handle, message);
 				return WRITE_OK;
 			}
 		}
@@ -641,7 +654,6 @@ static int _write_socket(connection_t *cn, char *message)
 			mylog(LOG_INFO, "Broken socket: %s.", strerror(errno));
 		connection_close(cn);
 	}
-	mylog(LOG_DEBUGVERB, "write: %d, %s", cn->handle, strerror(errno));
 	return WRITE_ERROR;
 }
 
@@ -705,16 +717,13 @@ static void real_write_all(connection_t *cn)
 
 static void maybe_trigger_read_event(connection_t *cn)
 {
-	log(LOG_DEBUG, "maybe_trigger_read_event %d %d", cn->handle, cn->connected);
+	log(LOG_DEBUG, "fd: %d, maybe_trigger_read_event %d", cn->handle, cn->connected);
 	if (cn->connected == CONN_SSL_NEED_RETRY_READ
 	    || cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
 		return;
 	}
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
-	log(LOG_DEBUG, "maybe_trigger_read_event IN %d %d", cn->handle,
-	    cn->connected);
-
 	descriptor_set_events(descriptor, POLLER_IN);
 }
 
@@ -775,7 +784,6 @@ list_t *read_lines(connection_t *cn, int *error)
 		break;
 	case CONN_NEW:
 	case CONN_INPROGRESS:
-	case CONN_NEED_SSLIZE:
 		*error = 0;
 		ret = NULL;
 		break;
@@ -796,7 +804,7 @@ list_t *read_lines(connection_t *cn, int *error)
 static int read_socket_SSL(connection_t *cn)
 {
 	int max, count;
-
+	log(LOG_ERROR, "fd: %d, %d", cn->handle, cn->incoming_end);
 	max = CONN_BUFFER_SIZE - cn->incoming_end;
 	if (cn->ssl_client && cn->cert == NULL) {
 		cn->cert = mySSL_get_cert(cn->ssl_h);
@@ -811,6 +819,7 @@ static int read_socket_SSL(connection_t *cn)
 	if (count < 0) {
 		int err = SSL_get_error(cn->ssl_h, count);
 		if (err == SSL_ERROR_WANT_READ) {
+			log(LOG_ERROR, "fd: %d, read want read", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
 			descriptor_set_events(
 				poller_get_descriptor(global_poller(), cn->handle),
@@ -818,6 +827,7 @@ static int read_socket_SSL(connection_t *cn)
 			return READ_OK;
 		}
 		if (err == SSL_ERROR_WANT_WRITE) {
+			log(LOG_ERROR, "fd: %d, read want write", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
 			descriptor_set_events(
 				poller_get_descriptor(global_poller(), cn->handle),
@@ -835,6 +845,8 @@ static int read_socket_SSL(connection_t *cn)
 		return READ_ERROR;
 	}
 
+	// Maybe a CONN_SSL_NEED_RETRY_READ succeeded.
+	cn->connected = CONN_OK;
 	cn->incoming_end += count;
 	return READ_OK;
 }
@@ -866,7 +878,7 @@ static int read_socket(connection_t *cn)
 		return READ_ERROR;
 	}
 	cn->incoming[cn->incoming_end + count] = 0;
-	log(LOG_ERROR, "READ: (%d) %s",cn->handle, cn->incoming + cn->incoming_end);
+	log(LOG_DEBUG, "fd: %d, READ: %s",cn->handle, cn->incoming + cn->incoming_end);
 	
 	cn->incoming_end += count;
 	return READ_OK;
@@ -913,7 +925,6 @@ int cn_is_new(connection_t *cn)
 	case CONN_ERROR:
 	case CONN_DISCONN:
 	case CONN_EXCEPT:
-	case CONN_NEED_SSLIZE:
 	case CONN_OK:
 	case CONN_UNTRUSTED:
 		return 0;
@@ -937,7 +948,6 @@ static int cn_is_in_error(connection_t *cn)
 		return 1;
 	case CONN_NEW:
 	case CONN_INPROGRESS:
-	case CONN_NEED_SSLIZE:
 	case CONN_OK:
 	case CONN_SSL_CONNECT:
 	case CONN_SSL_NEED_RETRY_WRITE:
@@ -1051,7 +1061,7 @@ static void create_socket(char *dsthostname, char *dstport, char *srchostname,
 	struct connecting_data *cdata;
 	struct addrinfo hint;
 
-	mylog(LOG_DEBUG, "create_socket %s %s src: %s %s", dsthostname, dstport, srchostname, srcport);
+	log(LOG_DEBUG, "create_socket %s %s src: %s %s", dsthostname, dstport, srchostname, srcport);
 
 	memset(&hint, 0, sizeof(hint));
 	hint.ai_flags = AI_PASSIVE;
@@ -1241,14 +1251,13 @@ connection_t *accept_new(listener_t *listener)
 	struct sockaddr sa;
 
 	handle = accept(listener->handle, &sa, &sa_len);
-	mylog(LOG_DEBUG, "Accepted from %d, new fd: %d", listener->handle, handle);
+	log(LOG_DEBUG, "Accepted from %d, new fd: %d", listener->handle, handle);
 	if (handle < 0) {
 		fatal("accept failed: %s", strerror(errno));
 	}
 
 	socket_set_nonblock(handle);
 
-	// TODO: enable anti_flood
 	conn = connection_init(listener->anti_flood, listener->timeout, /*listen=*/1);
 	conn->connect_time = time(NULL);
 	conn->user_data = listener->user_data;
@@ -1263,8 +1272,6 @@ connection_t *accept_new(listener_t *listener)
 	descriptor->on_hup = connection_client_on_hup;
 	descriptor->data = conn;
 
-	log(LOG_DEBUG, "Listening for out: %d 0x%x", conn->handle,
-	      POLLER_OUT);
 	descriptor_set_events(descriptor, POLLER_OUT);
 
 #ifdef HAVE_LIBSSL
@@ -1274,11 +1281,18 @@ connection_t *accept_new(listener_t *listener)
 			connection_free(conn);
 			return NULL;
 		}
+		conn->ssl_ctx_h = listener->ssl_context;
+		if (!SSL_set_fd(conn->ssl_h, conn->handle)) {
+			mylog(LOG_ERROR,
+			      "unable to associate FD to SSL "
+			      "structure");
+			conn->connected = CONN_ERROR;
+			return conn;
+		}
 		SSL_set_accept_state(conn->ssl_h);
+		//conn->connected = CONN_SSL_CONNECT;
 	}
 #endif
-	mylog(LOG_DEBUG, "New client on socket %d !", conn->handle);
-
 	return conn;
 }
 
@@ -1363,7 +1377,7 @@ void connection_ssl_initialize()
 			mylog(LOG_ERROR, "/dev/random: %s", strerror(errno));
 			goto prng_end;
 		}
-		mylog(LOG_DEBUG,
+		log(LOG_DEBUG,
 		      "PRNG seeded with %d /dev/random "
 		      "bytes",
 		      ret);
@@ -1375,7 +1389,7 @@ prng_end:
 		ret = close(fd);
 	} while (ret != 0 && errno == EINTR);
 	if (RAND_status()) {
-		mylog(LOG_DEBUG, "SSL: PRNG is seeded !");
+		log(LOG_DEBUG, "SSL: PRNG is seeded !");
 	} else {
 		mylog(LOG_WARN, "SSL: PRNG is not seeded enough");
 		mylog(LOG_WARN,
@@ -1421,6 +1435,7 @@ static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options)
 		}
 	}
 
+	log(LOG_DEBUG, "file: %s", options->cert_pem_file);
 	if (!SSL_CTX_use_certificate_chain_file(sslctx, options->cert_pem_file))
 		mylog(LOG_WARN,
 		      "SSL: Unable to load certificate file");
@@ -1508,13 +1523,19 @@ static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 }
 
 static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
-		char *srchostname, char *srcport, connection_ssl_options_t* ssl_options, int timeout)
+					 char *srchostname, char *srcport,
+					 connection_ssl_options_t *ssl_options,
+					 int timeout)
 {
 	connection_t *conn;
-
-	// TODO: enable anti_flood
+	log(LOG_ERROR,
+	    "_connection_new_SSL %d ssl_check_store: %s ssl_client_certfile: "
+	    "%s ",
+	    ssl_options->ssl_check_mode, ssl_options->ssl_check_store,
+	    ssl_options->ssl_client_certfile);
 	conn = connection_init(/*anti_flood=*/1, timeout, /*listen=*/0);
-	if (!(conn->ssl_ctx_h = connection_create_ssl_context(ssl_options->ssl_ciphers))) {
+	if (!(conn->ssl_ctx_h = connection_create_ssl_context(
+		      ssl_options->ssl_ciphers))) {
 		mylog(LOG_ERROR, "SSL context initialization failed");
 		return conn;
 	}
@@ -1523,52 +1544,66 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 	conn->ssl_check_mode = ssl_options->ssl_check_mode;
 
 	switch (conn->ssl_check_mode) {
-	struct stat st_buf;
+		struct stat st_buf;
 	case SSL_CHECK_BASIC:
-		if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, ssl_options->ssl_check_store,
-				NULL)) {
-			mylog(LOG_ERROR, "Can't assign check store to "
-					"SSL connection! Proceeding without!");
+		if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h,
+						   ssl_options->ssl_check_store,
+						   NULL)) {
+			mylog(LOG_ERROR,
+			      "Can't assign check store to "
+			      "SSL connection! Proceeding without!");
 		}
 		break;
 	case SSL_CHECK_CA:
 		if (!ssl_options->ssl_check_store) {
 			if (SSL_CTX_set_default_verify_paths(conn->ssl_ctx_h)) {
-				mylog(LOG_INFO, "No SSL certificate check store configured. "
-						"Default store will be used.");
+				mylog(LOG_INFO,
+				      "No SSL certificate check store "
+				      "configured. "
+				      "Default store will be used.");
 				break;
 			} else {
-				mylog(LOG_ERROR, "No SSL certificate check store configured "
-						"and cannot use default store!");
+				mylog(LOG_ERROR,
+				      "No SSL certificate check store "
+				      "configured "
+				      "and cannot use default store!");
 				return conn;
 			}
 		}
 		// Check if check_store is a file or directory
 		if (stat(ssl_options->ssl_check_store, &st_buf) == 0) {
 			if (st_buf.st_mode & S_IFDIR) {
-				if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, NULL,
-						ssl_options->ssl_check_store)) {
-					mylog(LOG_ERROR, "Can't assign check store to "
-							"SSL connection!");
+				if (!SSL_CTX_load_verify_locations(
+					    conn->ssl_ctx_h, NULL,
+					    ssl_options->ssl_check_store)) {
+					mylog(LOG_ERROR,
+					      "Can't assign check store to "
+					      "SSL connection!");
 					return conn;
 				}
 				break;
 			}
 			if (st_buf.st_mode & S_IFREG) {
-				if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h, ssl_options->ssl_check_store,
-						NULL)) {
-					mylog(LOG_ERROR, "Can't assign check store to "
-							"SSL connection!");
+				if (!SSL_CTX_load_verify_locations(
+					    conn->ssl_ctx_h,
+					    ssl_options->ssl_check_store,
+					    NULL)) {
+					mylog(LOG_ERROR,
+					      "Can't assign check store to "
+					      "SSL connection!");
 					return conn;
 				}
 				break;
 			}
-			mylog(LOG_ERROR, "Specified SSL certificate check store is neither "
-					"a file nor a directory.");
+			mylog(LOG_ERROR,
+			      "Specified SSL certificate check store is "
+			      "neither "
+			      "a file nor a directory.");
 			return conn;
 		}
-		mylog(LOG_ERROR, "Can't open SSL certificate check store! Check path "
-				"and permissions.");
+		mylog(LOG_ERROR,
+		      "Can't open SSL certificate check store! Check path "
+		      "and permissions.");
 		return conn;
 	}
 
@@ -1578,27 +1613,31 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 		break;
 	case SSL_CHECK_BASIC:
 		SSL_CTX_set_verify(conn->ssl_ctx_h, SSL_VERIFY_PEER,
-				bip_ssl_verify_callback);
+				   bip_ssl_verify_callback);
 		/* SSL_CTX_set_verify_depth(conn->ssl_ctx_h, 0); */
 		break;
 	case SSL_CHECK_CA:
 		SSL_CTX_set_verify(conn->ssl_ctx_h, SSL_VERIFY_PEER,
-				bip_ssl_verify_callback);
+				   bip_ssl_verify_callback);
 		break;
 	default:
 		fatal("Unknown SSL cert check mode.");
 	}
 
 	if (ssl_options->ssl_client_certfile) {
-		if (!SSL_CTX_use_certificate_chain_file(conn->ssl_ctx_h,
-					ssl_options->ssl_client_certfile))
+		if (!SSL_CTX_use_certificate_chain_file(
+			    conn->ssl_ctx_h, ssl_options->ssl_client_certfile))
 			mylog(LOG_WARN, "SSL: Unable to load certificate file");
-		else if (!SSL_CTX_use_PrivateKey_file(conn->ssl_ctx_h,
-					ssl_options->ssl_client_certfile, SSL_FILETYPE_PEM))
+		else if (!SSL_CTX_use_PrivateKey_file(
+				 conn->ssl_ctx_h,
+				 ssl_options->ssl_client_certfile,
+				 SSL_FILETYPE_PEM))
 			mylog(LOG_WARN, "SSL: Unable to load key file");
 		else
-			mylog(LOG_INFO, "SSL: using %s pem file as client SSL "
-					"certificate", ssl_options->ssl_client_certfile);
+			mylog(LOG_INFO,
+			      "SSL: using %s pem file as client SSL "
+			      "certificate",
+			      ssl_options->ssl_client_certfile);
 	}
 
 	conn->ssl_h = SSL_new(conn->ssl_ctx_h);
@@ -1606,12 +1645,6 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 		mylog(LOG_ERROR, "Unable to allocate SSL structures");
 		return conn;
 	}
-	/* ys: useless as long as we have a context by connection
-	if (sslctx->session_cache_head)
-		if (!SSL_set_session(conn->ssl_h, sslctx->session_cache_head))
-			mylog(LOG_ERROR, "unable to set SSL session id to"
-					" most recent used");
-	*/
 	SSL_set_connect_state(conn->ssl_h);
 
 	/* Put our connection_t in the SSL object for the verify callback */
@@ -1671,7 +1704,7 @@ static int connection_timedout(connection_t *cn)
 		close(cn->handle);
 		cn->handle = -1;
 		connect_trynext(cn);
-		if (!cn_is_new(cn) && cn->connected != CONN_NEED_SSLIZE)
+		if (!cn_is_new(cn))
 			return 1;
 	}
 	return 0;
