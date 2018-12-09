@@ -189,7 +189,7 @@ void poller_loop(poller_t *poller)
 char *descriptor_dbg_string(descriptor_t *d)
 {
 	char *ret = bip_malloc(256);
-	snprintf(ret, 255, "descriptor_t %0.8x, fd: %d %s %s %s, removed: %d",
+	snprintf(ret, 255, "descriptor_t %p, fd: %d %s %s %s, removed: %d",
 		 d, d->fd, d->events & POLLER_IN ? "POLLER_IN" : "",
 		 d->events & POLLER_OUT ? "POLLER_OUT" : "",
 		 d->events & POLLER_HUP ? "POLLER_HUP" : "", d->removed);
