@@ -1963,7 +1963,9 @@ static void irc_server_startup(struct link_server *ircs)
 		realname = LINK(ircs)->user->default_realname;
 	WRITE_LINE4(CONN(ircs), NULL, "USER", username, "0", "*", realname);
 
-	nick = ircs->nick;
+	nick = NULL;
+	if (ircs->nick)
+		nick = bip_strdup(ircs->nick);
 	if (LINK(ircs)->away_nick && LINK(ircs)->l_clientc == 0) {
 		if (nick)
 			free(nick);
