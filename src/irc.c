@@ -2582,7 +2582,6 @@ void irc_one_shot(bip_t *bip, int timeleft)
 		list_add_last(&connections_with_lines, conn);
 	}
 	while ((conn = list_remove_first(&connections_with_lines))) {
-		log(LOG_ERROR, "bip_on_event %d", conn->handle);
 		bip_on_event(bip, conn);
 	}
 }

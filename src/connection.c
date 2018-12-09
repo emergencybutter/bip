@@ -147,22 +147,18 @@ void connection_free(connection_t *cn)
 // Turns either a new client or a newly accepted socket to an SSL socket.
 static void connection_sslize(connection_t *cn)
 {
-	log(LOG_ERROR, "fd: %d, connection_sslize", cn->handle);
+	log(LOG_DEBUG, "fd: %d, connection_sslize", cn->handle);
 
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
 	int err;
 	if (cn->ssl_client) {
-		log(LOG_ERROR, "fd: %d, connect", cn->handle);
 		err = SSL_connect(cn->ssl_h);
 	} else {
-		log(LOG_ERROR, "fd: %d, accept", cn->handle);
 		err = SSL_accept(cn->ssl_h);
 	}
 	int ssl_err = 0;
 	ssl_err = SSL_get_error(cn->ssl_h, err);
-	log(LOG_DEBUG, "fd: %d, ssl_err: %d (SSL_ERROR_WANT_READ: %d)",
-	    cn->handle, ssl_err, SSL_ERROR_WANT_READ);
 	switch (ssl_err) {
 	case SSL_ERROR_WANT_READ:
 		descriptor_set_events(descriptor, POLLER_IN);
@@ -318,16 +314,12 @@ void real_read_all(connection_t *cn)
 	if (cn->incoming_lines == NULL)
 		cn->incoming_lines = list_new(list_ptr_cmp);
 	data_find_lines(cn);
-	log(LOG_ERROR, "incoming: %d", list_count(cn->incoming_lines));
 	maybe_trigger_read_event(cn);
 }
 
 static void connection_client_on_out(void *data)
 {
 	connection_t *cn = data;
-	log(LOG_DEBUG, "fd: %d, connection_client_on_out: (connected: %d)",
-	    cn->handle, cn->connected);
-
 	if (cn_is_in_error(cn)) {
 		mylog(LOG_ERROR, "Error on fd %d (state %d)", cn->handle,
 		      cn->connected);
@@ -815,7 +807,7 @@ list_t *read_lines(connection_t *cn, int *error)
 static int read_socket_SSL(connection_t *cn)
 {
 	int max, count;
-	log(LOG_ERROR, "fd: %d, %d", cn->handle, cn->incoming_end);
+	log(LOG_DEBUG, "fd: %d, %d", cn->handle, cn->incoming_end);
 	max = CONN_BUFFER_SIZE - cn->incoming_end;
 	if (cn->ssl_client && cn->cert == NULL) {
 		cn->cert = mySSL_get_cert(cn->ssl_h);
@@ -830,7 +822,7 @@ static int read_socket_SSL(connection_t *cn)
 	if (count < 0) {
 		int err = SSL_get_error(cn->ssl_h, count);
 		if (err == SSL_ERROR_WANT_READ) {
-			log(LOG_ERROR, "fd: %d, read want read", cn->handle);
+			log(LOG_DEBUG, "fd: %d, read want read", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
 			descriptor_set_events(
 				poller_get_descriptor(global_poller(),
@@ -839,7 +831,7 @@ static int read_socket_SSL(connection_t *cn)
 			return READ_OK;
 		}
 		if (err == SSL_ERROR_WANT_WRITE) {
-			log(LOG_ERROR, "fd: %d, read want write", cn->handle);
+			log(LOG_DEBUG, "fd: %d, read want write", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
 			descriptor_set_events(
 				poller_get_descriptor(global_poller(),
@@ -1548,7 +1540,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 					 int timeout)
 {
 	connection_t *conn;
-	log(LOG_ERROR,
+	log(LOG_DEBUG,
 	    "_connection_new_SSL %d ssl_check_store: %s ssl_client_certfile: "
 	    "%s ",
 	    ssl_options->ssl_check_mode, ssl_options->ssl_check_store,
