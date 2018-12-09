@@ -24,5 +24,6 @@ bip_LDADD = libbip.a $(OPENSSL_LIBS)
 bipmkpw_SOURCES = bipmkpw.c md5.c util.c
 bipmkpw_CFLAGS = $(OPENSSL_CFLAGS)
 bipmkpw_LDADD = libbip.a $(OPENSSL_LIBS)
+
 AM_YFLAGS= -d
 BUILT_SOURCES = conf.c conf.h lex.c
