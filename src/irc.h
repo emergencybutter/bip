@@ -70,13 +70,13 @@ struct bipuser {
 	char *default_realname;
 
 	/* backlog options */
-	int backlog:1;
+	int backlog : 1;
 	int backlog_lines;
-	int always_backlog:1;
-	int bl_msg_only:1;
-	int backlog_no_timestamp:1;
-	int blreset_on_talk:1;
-	int blreset_connection:1;
+	int always_backlog : 1;
+	int bl_msg_only : 1;
+	int backlog_no_timestamp : 1;
+	int blreset_on_talk : 1;
+	int blreset_connection : 1;
 
 #ifdef HAVE_LIBSSL
 	int ssl_check_mode;
@@ -85,11 +85,10 @@ struct bipuser {
 #endif
 
 	hash_t connections;
-	int in_use:1; /* for mark and sweep on reload */
+	int in_use : 1; /* for mark and sweep on reload */
 };
 
-struct network
-{
+struct network {
 	char *name;
 #ifdef HAVE_LIBSSL
 	int ssl;
@@ -100,7 +99,7 @@ struct network
 };
 
 struct link {
-	char *name;	/* id */
+	char *name; /* id */
 
 	/** link live data **/
 	struct link_server *l_server;
@@ -126,15 +125,15 @@ struct link {
 
 	/** link options */
 
-	int follow_nick:1;
-	int ignore_first_nick:1;
-	int autojoin_on_kick:1;
-	int ignore_server_capab:1;
+	int follow_nick : 1;
+	int ignore_first_nick : 1;
+	int autojoin_on_kick : 1;
+	int ignore_server_capab : 1;
 	list_t on_connect_send;
 	char *no_client_away_msg;
 	char *away_nick;
-	hash_t chan_infos;		/* channels we want */
-	list_t chan_infos_order;	/* for order only */
+	hash_t chan_infos;       /* channels we want */
+	list_t chan_infos_order; /* for order only */
 
 	struct bipuser *user;
 
@@ -154,7 +153,7 @@ struct link {
 
 #ifdef HAVE_LIBSSL
 	int ssl_check_mode;
-	STACK_OF(X509) *untrusted_certs;
+	STACK_OF(X509) * untrusted_certs;
 #endif
 	int in_use; /* for mark and sweep on reload */
 };
@@ -175,9 +174,9 @@ struct link_any {
 
 #define IRCC_NONE (0)
 #define IRCC_NICK (1)
-#define IRCC_USER (1<<1)
-#define IRCC_PASS (1<<2)
-#define IRCC_READY (IRCC_NICK|IRCC_PASS|IRCC_USER)
+#define IRCC_USER (1 << 1)
+#define IRCC_PASS (1 << 2)
+#define IRCC_READY (IRCC_NICK | IRCC_PASS | IRCC_USER)
 
 struct link_client {
 	struct link_connection _link_c;
@@ -269,7 +268,7 @@ void link_kill(bip_t *bip, struct link *);
 void unbind_from_link(struct link_client *ic);
 char *nick_from_ircmask(const char *mask);
 void irc_cli_backlog(struct link_client *ic, int hours);
+void bip_tick(bip_t *bip);
 #define BIP_FAKEMASK "!bip@bip.bip.bip"
 
 #endif
-

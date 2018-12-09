@@ -22,14 +22,14 @@ static int socket_set_nonblock(int s)
 	int flags;
 
 	if ((flags = fcntl(s, F_GETFL, 0)) < 0) {
-		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s",
-				s, strerror(errno));
+		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s", s,
+		      strerror(errno));
 		return 0;
 	}
 
 	if (fcntl(s, F_SETFL, flags | O_NONBLOCK) < 0) {
-		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s",
-				s, strerror(errno));
+		mylog(LOG_ERROR, "Cannot set socket %d to non blocking : %s", s,
+		      strerror(errno));
 		return 0;
 	}
 	return 1;
@@ -54,18 +54,21 @@ void poller_unregister(poller_t *p, int fd)
 {
 	log(LOG_DEBUG, "Unregister FD:%d ", fd);
 	INT_KEY(str, fd);
-	descriptor_t* descriptor = hash_get(&p->fds, str);
+	descriptor_t *descriptor = hash_get(&p->fds, str);
 	descriptor->removed = 1;
 }
 
-void poller_unregister_finalize_iterator(hash_iterator_t* hi, descriptor_t* descriptor) {
+void poller_unregister_finalize_iterator(hash_iterator_t *hi,
+					 descriptor_t *descriptor)
+{
 	hash_it_remove(hi);
 	free(descriptor);
 }
 
-void poller_unregister_finalize(poller_t *p, int fd) {
+void poller_unregister_finalize(poller_t *p, int fd)
+{
 	INT_KEY(str, fd);
-	descriptor_t* descriptor = hash_get(&p->fds, str);
+	descriptor_t *descriptor = hash_get(&p->fds, str);
 	if (!descriptor) {
 		fatal("descriptor not found %s", str);
 	}
@@ -107,7 +110,8 @@ void poller_wait(poller_t *p, int timeout)
 		}
 		if (descriptor->fd == 7) {
 			char *dbgs = descriptor_dbg_string(descriptor);
-			log(LOG_DEBUG, "Descriptor: %d %s", descriptor->fd, dbgs);
+			log(LOG_DEBUG, "Descriptor: %d %s", descriptor->fd,
+			    dbgs);
 			free(dbgs);
 		}
 
@@ -139,7 +143,7 @@ void poller_wait(poller_t *p, int timeout)
 	int *removed_fds = bip_malloc(sizeof(int) * num_fds);
 	int num_removed_fds = 0;
 	for (int i = 0; i < num_fds; i++) {
-		descriptor_t* descriptor = poller_get_descriptor(p, fds[i].fd);
+		descriptor_t *descriptor = poller_get_descriptor(p, fds[i].fd);
 		if (fds[i].revents & POLLIN)
 			descriptor->on_in(descriptor->data);
 		if (!descriptor->removed && (fds[i].revents & POLLOUT))

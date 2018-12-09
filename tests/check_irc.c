@@ -25,7 +25,7 @@ void init_test()
 struct irc_test_server;
 
 typedef struct irc_test_server_client_state {
-	connection_t* connection;
+	connection_t *connection;
 	int replay_line;
 	array_t *replay_lines;
 	struct irc_test_server *server;
@@ -49,12 +49,14 @@ char *irc_test_server_client_state_current_line(
 	return array_get(client_state->replay_lines, client_state->replay_line);
 }
 
-void irc_test_server_init(irc_test_server_t* server, int ssl) {
+void irc_test_server_init(irc_test_server_t *server, int ssl)
+{
 	listener_ssl_options_t options;
 	listener_ssl_options_init(&options);
 	options.cert_pem_file = "bip.test.pem";
 	array_init(&server->clients);
-	listener_init(&server->listener, "127.0.0.1", 6667, ssl ? &options : NULL);
+	listener_init(&server->listener, "127.0.0.1", 6667,
+		      ssl ? &options : NULL);
 	array_init(&server->client_replay_lines);
 	server->ssl = ssl;
 }
@@ -104,10 +106,11 @@ void irc_test_server_process(irc_test_server_t *server)
 			}
 			continue;
 		}
-		char *err_msg = NULL;
-		asprintf(&err_msg,
+		char *err_msg = bip_malloc(256);
+		snprintf(err_msg, 255,
 			 "Proxy->Server connection died before %s (%d)", line,
 			 client_state->connection->connected);
+		err_msg[255] = 0;
 		ck_assert_msg(cn_is_connected(client_state->connection),
 			      err_msg);
 		free(err_msg);
@@ -134,23 +137,30 @@ void irc_test_server_process(irc_test_server_t *server)
 }
 
 typedef struct irc_test_client {
-	connection_t* connection;
+	connection_t *connection;
 	array_t proxy_replay_lines;
 	int proxy_replay_line;
 } irc_test_client_t;
 
-void irc_test_client_init(irc_test_client_t*client) {
+void irc_test_client_init(irc_test_client_t *client, int client_ssl)
+{
+	connection_ssl_options_t options;
+	connection_ssl_options_init(&options);
+	options.ssl_check_mode = SSL_CHECK_NONE;
 	array_init(&client->proxy_replay_lines);
 	client->proxy_replay_line = 0;
-	client->connection = connection_new("127.0.0.1", 7777, NULL, 0, NULL, 100);
+	client->connection = connection_new("127.0.0.1", 7777, NULL, 0,
+					    client_ssl ? &options : NULL, 100);
 }
 
 char *irc_test_client_current_line(irc_test_client_t *client)
 {
-	if (client->proxy_replay_line >= array_count(&client->proxy_replay_lines)) {
+	if (client->proxy_replay_line
+	    >= array_count(&client->proxy_replay_lines)) {
 		return NULL;
 	}
-	return array_get(&client->proxy_replay_lines, client->proxy_replay_line);
+	return array_get(&client->proxy_replay_lines,
+			 client->proxy_replay_line);
 }
 
 void irc_test_client_process(irc_test_client_t *client)
@@ -159,7 +169,8 @@ void irc_test_client_process(irc_test_client_t *client)
 	    == array_count(&client->proxy_replay_lines)) {
 		return;
 	}
-	if (client->connection->connected == CONN_INPROGRESS) {
+	if (client->connection->connected == CONN_INPROGRESS
+	    || client->connection->connected == CONN_SSL_CONNECT) {
 		return;
 	}
 	char *line = irc_test_client_current_line(client);
@@ -189,7 +200,7 @@ void irc_test_client_process(irc_test_client_t *client)
 	}
 }
 
-void set_up_bip(bip_t *bip, int server_ssl)
+void set_up_bip(bip_t *bip, int server_ssl, int client_ssl)
 {
 	struct network *n;
 	n = bip_calloc(sizeof(struct network), 1);
@@ -224,8 +235,8 @@ void set_up_bip(bip_t *bip, int server_ssl)
 	l->network = n;
 }
 
-void test_proxy_connects_opts(int server_ssl) {
-
+void test_proxy_connects_opts(int server_ssl)
+{
 	bip_t bip;
 	bip_init(&bip);
 	bip.listener = listener_new("127.0.0.1", 7777, NULL);
@@ -243,13 +254,13 @@ void test_proxy_connects_opts(int server_ssl) {
 	array_push(&server.client_replay_lines,
 		   "S::servername 376 nick0 :End of /MOTD command.\r\n");
 
-	set_up_bip(&bip, server_ssl);
+	set_up_bip(&bip, server_ssl, /*client_ssl=*/0);
 	ck_assert_int_eq(0, list_count(&bip.conn_list));
 	bip_tick(&bip);
 	ck_assert_int_eq(1, list_count(&bip.conn_list));
 	while (array_count(&server.clients) != 1) {
 		irc_test_server_process(&server);
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
 	}
 	log(LOG_ERROR, "proxy connected to server");
 	// Find the server link.
@@ -260,7 +271,7 @@ void test_proxy_connects_opts(int server_ssl) {
 	ck_assert_int_eq(link->s_state, IRCS_NONE);
 	connection_t *bip_to_server = CONN(link->l_server);
 	while (link->s_state != IRCS_CONNECTED) {
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
 		irc_test_server_process(&server);
 	}
 	ck_assert_int_eq(array_count(&server.clients), 1);
@@ -275,15 +286,30 @@ START_TEST(test_proxy_connects)
 }
 END_TEST
 
-START_TEST(test_proxy_and_client_connects)
+#ifdef HAVE_LIBSSL
+START_TEST(test_proxy_connects_ssl)
+{
+	test_proxy_connects_opts(1);
+}
+END_TEST
+#endif
+
+void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 {
 	bip_t bip;
 	bip_init(&bip);
-	bip.listener = listener_new("127.0.0.1", 7777, NULL);
+	if (client_ssl) {
+		listener_ssl_options_t options;
+		listener_ssl_options_init(&options);
+		options.cert_pem_file = "bip.test.pem";
+		bip.listener = listener_new("127.0.0.1", 7777, &options);
+	} else {
+		bip.listener = listener_new("127.0.0.1", 7777, NULL);
+	}
 	assert(bip.listener);
 
 	irc_test_server_t server;
-	irc_test_server_init(&server, 0);
+	irc_test_server_init(&server, server_ssl);
 	server.num_expected_clients = 1;
 
 	array_push(&server.client_replay_lines,
@@ -294,14 +320,15 @@ START_TEST(test_proxy_and_client_connects)
 	array_push(&server.client_replay_lines,
 		   "S::servername 376 nick0 :End of /MOTD command.\r\n");
 
-	set_up_bip(&bip, 0);
+	set_up_bip(&bip, server_ssl, client_ssl);
 	ck_assert_int_eq(0, list_count(&bip.conn_list));
 	bip_tick(&bip);
 	ck_assert_int_eq(1, list_count(&bip.conn_list));
 	while (array_count(&server.clients) != 1) {
 		irc_test_server_process(&server);
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
 	}
+	log(LOG_ERROR, "proxy connected to server");
 	// Find the server link.
 	ck_assert_int_eq(1, list_count(&bip.link_list));
 	struct link *link = list_get_first(&bip.link_list);
@@ -310,16 +337,15 @@ START_TEST(test_proxy_and_client_connects)
 	ck_assert_int_eq(link->s_state, IRCS_NONE);
 	connection_t *bip_to_server = CONN(link->l_server);
 	while (link->s_state != IRCS_CONNECTED) {
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
 		irc_test_server_process(&server);
 	}
 	ck_assert_int_eq(array_count(&server.clients), 1);
 	irc_test_server_client_state_t *client_state =
 		array_get(&server.clients, 0);
 	ck_assert_int_eq(client_state->replay_line, 4);
-
 	irc_test_client_t client;
-	irc_test_client_init(&client);
+	irc_test_client_init(&client, client_ssl);
 	array_push(&client.proxy_replay_lines,
 		   "S:USER username0 0 * realname0\r\n");
 	array_push(&client.proxy_replay_lines, "S:NICK nick0\r\n");
@@ -333,23 +359,29 @@ START_TEST(test_proxy_and_client_connects)
 	array_push(&client.proxy_replay_lines,
 		   "R::servername 376 nick0 :End of /MOTD command.");
 	while (link->l_clientc == 0) {
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
 		irc_test_server_process(&server);
 		irc_test_client_process(&client);
 	}
 	ck_assert_int_eq(client.proxy_replay_line, 4);
 	while (client.proxy_replay_line != 6) {
-		irc_one_shot(&bip, 0);
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
 		irc_test_client_process(&client);
 	}
+}
+
+START_TEST(test_proxy_and_client_connects)
+{
+	test_proxy_and_client_connects_opt(0, 0);
 }
 END_TEST
 
 #ifdef HAVE_LIBSSL
 
-START_TEST(test_proxy_connects_ssl)
+START_TEST(test_proxy_and_client_connects_ssl)
 {
-	test_proxy_connects_opts(1);
+	test_proxy_and_client_connects_opt(1, 1);
 }
 END_TEST
 
@@ -390,6 +422,7 @@ Suite *money_suite(void)
 	tcase_add_test(tc_core, test_proxy_and_client_connects);
 #ifdef HAVE_LIBSSL
 	tcase_add_test(tc_core, test_proxy_connects_ssl);
+	tcase_add_test(tc_core, test_proxy_and_client_connects_ssl);
 #endif
 	suite_add_tcase(s, tc_core);
 

@@ -42,7 +42,7 @@ void readpass(char *buffer, int buflen)
 	}
 
 	memcpy(&tt, &ttback, sizeof(ttback));
-	tt.c_lflag &= ~(ICANON|ECHO);
+	tt.c_lflag &= ~(ICANON | ECHO);
 	if (tcsetattr(ttyfd, TCSANOW, &tt) < 0) {
 		fprintf(stderr, "tcsetattr failed: %s\n", strerror(errno));
 		exit(1);
@@ -53,7 +53,7 @@ void readpass(char *buffer, int buflen)
 	int idx = 0;
 	int valid = 1;
 	while (idx < buflen) {
-		read(ttyfd, buffer+idx, 1);
+		read(ttyfd, buffer + idx, 1);
 		if (buffer[idx] == '\n') {
 			buffer[idx] = 0;
 			break;
@@ -89,7 +89,7 @@ int main(void)
 	seed = rand();
 
 	md5 = chash_double(str, seed);
-        for (i = 0; i < 20; i++)
+	for (i = 0; i < 20; i++)
 		printf("%02x", md5[i]);
 	printf("\n");
 	free(md5);

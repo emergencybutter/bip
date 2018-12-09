@@ -71,7 +71,7 @@ typedef struct {
 	char *dh_file;
 	char *cert_pem_file;
 } listener_ssl_options_t;
-void listener_ssl_options_init(listener_ssl_options_t* options);
+void listener_ssl_options_init(listener_ssl_options_t *options);
 
 typedef struct {
 	// Ciphers to allow when connecting to an irc network.
@@ -83,7 +83,7 @@ typedef struct {
 	// SSL client certificate to use.
 	char *ssl_client_certfile;
 } connection_ssl_options_t;
-void connection_ssl_options_init(connection_ssl_options_t* options);
+void connection_ssl_options_init(connection_ssl_options_t *options);
 
 struct connecting_data;
 typedef struct connection {
@@ -126,7 +126,7 @@ typedef struct listener {
 	time_t timeout;
 	uint16_t localport;
 #ifdef HAVE_LIBSSL
-	SSL_CTX* ssl_context;
+	SSL_CTX *ssl_context;
 #endif
 } listener_t;
 
@@ -155,7 +155,7 @@ int connection_remoteport(connection_t *cn);
 char *connection_localip(connection_t *cn);
 char *connection_remoteip(connection_t *cn);
 
-poller_t* global_poller();
+poller_t *global_poller();
 
 void connection_ssl_initialize();
 
