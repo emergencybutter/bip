@@ -1,5 +1,5 @@
-TESTS = check_poller check_line check_connection check_irc
-check_PROGRAMS = check_poller check_line check_connection check_irc
+TESTS = check_poller check_line check_connection check_irc check_bucket
+check_PROGRAMS = check_poller check_line check_connection check_irc check_bucket
 
 check_line_SOURCES = check_line.c $(top_builddir)/src/line.h
 check_line_CFLAGS = @CHECK_CFLAGS@ $(OPENSSL_CFLAGS)
@@ -16,3 +16,7 @@ check_connection_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@ $(OPENSSL_LIB
 check_irc_SOURCES = check_irc.c $(top_builddir)/src/irc.h
 check_irc_CFLAGS = @CHECK_CFLAGS@ $(OPENSSL_CFLAGS)
 check_irc_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@ $(OPENSSL_LIBS)
+
+check_bucket_SOURCES = check_bucket.c $(top_builddir)/src/bucket.h
+check_bucket_CFLAGS = @CHECK_CFLAGS@ $(OPENSSL_CFLAGS)
+check_bucket_LDADD = $(top_builddir)/src/libbip.a @CHECK_LIBS@ $(OPENSSL_LIBS)

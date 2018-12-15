@@ -1,7 +1,9 @@
 noinst_LIBRARIES = libbip.a
 
-libbip_a_SOURCES = conf.y lex.l \
+libbip_a_SOURCES = \
 	bip.c bip.h \
+	bucket.c bucket.h \
+	conf.y lex.l \
 	connection.c connection.h \
 	defaults.h \
 	irc.c irc.h \
@@ -9,9 +11,9 @@ libbip_a_SOURCES = conf.y lex.l \
 	log.c log.h \
 	md5.c md5.h \
 	path_util.c path_util.h \
+	poller.c poller.h \
 	tuple.h \
-	util.c util.h \
-	poller.c poller.h
+	util.c util.h
 
 libbip_a_CFLAGS = $(OPENSSL_CFLAGS)
 

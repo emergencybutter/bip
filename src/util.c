@@ -888,7 +888,7 @@ int bip_duration_ms(struct timespec *to, struct timespec *from)
 	if (to->tv_sec - from->tv_sec <= (INT_MIN / 1000)) {
 		return INT_MIN;
 	}
-	int ms = to->tv_sec - from->tv_sec * 1000;
+	int ms = (to->tv_sec - from->tv_sec) * 1000;
 	ms += (to->tv_nsec - from->tv_nsec) / 1000000;
 	return ms;
 }

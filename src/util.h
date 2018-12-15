@@ -256,4 +256,5 @@ static inline void *array_pop(array_t *a)
 void hash_binary(char *hex, unsigned char **password, unsigned int *seed);
 void bip_gettime(struct timespec *time);
 int bip_duration_ms(struct timespec *to, struct timespec *from);
+
 #endif
