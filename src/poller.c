@@ -13,7 +13,7 @@ poller_t *poller_create()
 	p->timeout = -1;
 	p->timed_out = NULL;
 	p->want_exit = 0;
-	poller_gettime(&p->last_timeout);
+	bip_gettime(&p->last_timeout);
 	return p;
 }
 
@@ -108,13 +108,6 @@ void poller_wait(poller_t *p, int timeout)
 			poller_unregister_finalize_iterator(&hi, descriptor);
 			continue;
 		}
-		if (descriptor->fd == 7) {
-			char *dbgs = descriptor_dbg_string(descriptor);
-			log(LOG_DEBUG, "Descriptor: %d %s", descriptor->fd,
-			    dbgs);
-			free(dbgs);
-		}
-
 		if (descriptor->events != 0) {
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
@@ -157,20 +150,12 @@ void poller_wait(poller_t *p, int timeout)
 	free(fds);
 }
 
-void poller_gettime(struct timespec *time)
-{
-	int errtime = clock_gettime(CLOCK_MONOTONIC, time);
-	if (errtime != 0) {
-		fatal("clock_gettime: %s", strerror(errno));
-	}
-}
-
 void poller_one_shot(poller_t *poller)
 {
 	int timeout_ms = poller->timeout;
 	poller_wait(poller, timeout_ms);
 	struct timespec now;
-	poller_gettime(&now);
+	bip_gettime(&now);
 	if (poller->timeout >= 0) {
 		timeout_ms -= (now.tv_sec - poller->last_timeout.tv_sec) * 1000
 			      + (now.tv_nsec - poller->last_timeout.tv_nsec)
@@ -184,7 +169,7 @@ void poller_one_shot(poller_t *poller)
 
 void poller_loop(poller_t *poller)
 {
-	poller_gettime(&poller->last_timeout);
+	bip_gettime(&poller->last_timeout);
 	while (!poller->want_exit) {
 		poller_one_shot(poller);
 	}
@@ -193,8 +178,8 @@ void poller_loop(poller_t *poller)
 char *descriptor_dbg_string(descriptor_t *d)
 {
 	char *ret = bip_malloc(256);
-	snprintf(ret, 255, "descriptor_t %p, fd: %d %s %s %s, removed: %d",
-		 d, d->fd, d->events & POLLER_IN ? "POLLER_IN" : "",
+	snprintf(ret, 255, "descriptor_t %p, fd: %d %s %s %s, removed: %d", d,
+		 d->fd, d->events & POLLER_IN ? "POLLER_IN" : "",
 		 d->events & POLLER_OUT ? "POLLER_OUT" : "",
 		 d->events & POLLER_HUP ? "POLLER_HUP" : "", d->removed);
 	ret[255] = 0;

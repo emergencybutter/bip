@@ -74,9 +74,11 @@ void irc_test_server_process(irc_test_server_t *server)
 		state->replay_line = 0;
 		state->replay_lines = &server->client_replay_lines;
 		array_push(&server->clients, state);
-		log(LOG_ERROR, "IRC TEST SERVER, new client: %x", connection);
+		log(LOG_ERROR, "IRC TEST SERVER, new client: %x, fd: %d",
+		    connection, connection->handle);
 	}
-
+	log(LOG_DEBUG, "irc_test_server_process %d",
+	    array_count(&server->clients));
 	int i;
 	for (i = 0; i < array_count(&server->clients); i++) {
 		irc_test_server_client_state_t *client_state =
@@ -114,6 +116,7 @@ void irc_test_server_process(irc_test_server_t *server)
 		ck_assert_msg(cn_is_connected(client_state->connection),
 			      err_msg);
 		free(err_msg);
+		log(LOG_DEBUG, "irc_test_server_process, expecting: %s", line);
 		if (line[0] == 'S') {
 			write_line(client_state->connection, line + 2);
 			log(LOG_DEBUG, "TEST SERVER sent: %s", line + 2);
@@ -328,17 +331,21 @@ void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 		irc_test_server_process(&server);
 		irc_one_shot(&bip, 10);
 	}
-	log(LOG_ERROR, "proxy connected to server");
+	log(LOG_INFO, "proxy connected to server");
 	// Find the server link.
-	ck_assert_int_eq(1, list_count(&bip.link_list));
-	struct link *link = list_get_first(&bip.link_list);
-	ck_assert(link != NULL);
-	ck_assert(link->l_server != NULL);
-	ck_assert_int_eq(link->s_state, IRCS_NONE);
-	connection_t *bip_to_server = CONN(link->l_server);
-	while (link->s_state != IRCS_CONNECTED) {
-		irc_one_shot(&bip, 10);
-		irc_test_server_process(&server);
+	{
+		ck_assert_int_eq(1, list_count(&bip.link_list));
+
+		struct link *link = list_get_first(&bip.link_list);
+		ck_assert(link != NULL);
+		ck_assert(link->l_server != NULL);
+		ck_assert_int_eq(link->s_state, IRCS_NONE);
+		connection_t *bip_to_server = CONN(link->l_server);
+		while (link->s_state != IRCS_CONNECTED) {
+			irc_one_shot(&bip, 10);
+			irc_test_server_process(&server);
+			log(LOG_INFO, "link not linked: %d", link->s_state);
+		}
 	}
 	ck_assert_int_eq(array_count(&server.clients), 1);
 	irc_test_server_client_state_t *client_state =
@@ -346,6 +353,8 @@ void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 	ck_assert_int_eq(client_state->replay_line, 4);
 	irc_test_client_t client;
 	irc_test_client_init(&client, client_ssl);
+	log(LOG_INFO, "Client: fd: %d", client.connection->handle);
+
 	array_push(&client.proxy_replay_lines,
 		   "S:USER username0 0 * realname0\r\n");
 	array_push(&client.proxy_replay_lines, "S:NICK nick0\r\n");
@@ -358,10 +367,47 @@ void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 		   "R::servername 001 nick0 :Welcome nick0");
 	array_push(&client.proxy_replay_lines,
 		   "R::servername 376 nick0 :End of /MOTD command.");
-	while (link->l_clientc == 0) {
+	while (client.connection->connected != CONN_OK) {
 		irc_one_shot(&bip, 10);
 		irc_test_server_process(&server);
 		irc_test_client_process(&client);
+		log(LOG_INFO, "Client not connected yet: %d",
+		    client.connection->connected);
+	}
+	log(LOG_INFO, "Client connected to proxy tcp&ssl");
+	ck_assert_int_eq(1, list_count(&bip.connecting_client_list));
+	struct link_client *ic = list_get_first(&bip.connecting_client_list);
+	connection_t *proxy_connecting_client_conn = CONN(ic);
+	ck_assert(proxy_connecting_client_conn != NULL);
+	while (proxy_connecting_client_conn->connected != CONN_OK) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+		log(LOG_INFO,
+		    "Connecting client client not connected yet: %p %d",
+		    proxy_connecting_client_conn,
+		    proxy_connecting_client_conn->connected);
+	}
+
+	while (TYPE(ic) != IRC_TYPE_CLIENT) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+		log(LOG_INFO, "Logging client not logged yet: %p %d", ic,
+		    TYPE(ic));
+	}
+
+	struct link *link = list_get_first(&bip.link_list);
+	ck_assert(link != NULL);
+	ck_assert_int_eq(link->l_clientc, 1);
+	ck_assert_int_eq(CONN(link->l_clientv[0])->connected, CONN_OK);
+
+	while (client.proxy_replay_line < 4) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+		log(LOG_INFO, "Client not authenticated yet: %d",
+		    client.proxy_replay_line);
 	}
 	ck_assert_int_eq(client.proxy_replay_line, 4);
 	while (client.proxy_replay_line != 6) {

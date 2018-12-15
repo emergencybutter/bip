@@ -42,14 +42,14 @@ static void real_read_all(connection_t *cn);
 static int read_socket_SSL(connection_t *cn);
 static int read_socket(connection_t *cn);
 static void data_find_lines(connection_t *cn);
-static void maybe_trigger_read_event(connection_t *cn);
-static void maybe_trigger_write_event(connection_t *cn);
 static int cn_is_in_error(connection_t *cn);
 static void connection_save_endpoints(connection_t *c);
 static int connection_want_write(connection_t *cn);
 #ifdef HAVE_LIBSSL
 static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options);
 #endif
+static void reset_trigger_force_write(connection_t *cn);
+static void reset_trigger(connection_t *cn);
 
 void listener_ssl_options_init(listener_ssl_options_t *options)
 {
@@ -161,12 +161,10 @@ static void connection_sslize(connection_t *cn)
 	ssl_err = SSL_get_error(cn->ssl_h, err);
 	switch (ssl_err) {
 	case SSL_ERROR_WANT_READ:
-		descriptor_set_events(descriptor, POLLER_IN);
-		descriptor_unset_events(descriptor, POLLER_OUT);
+		reset_trigger(cn);
 		break;
 	case SSL_ERROR_WANT_WRITE:
-		descriptor_set_events(descriptor, POLLER_OUT);
-		descriptor_unset_events(descriptor, POLLER_IN);
+		reset_trigger_force_write(cn);
 		break;
 	case SSL_ERROR_ZERO_RETURN:
 	case SSL_ERROR_SSL:
@@ -197,8 +195,7 @@ static void connection_sslize(connection_t *cn)
 		case SSL_CHECK_NONE:
 			log(LOG_DEBUG, "fd: %d, connected (SSL)", cn->handle);
 			cn->connected = CONN_OK;
-			descriptor_set_events(descriptor, POLLER_IN);
-			descriptor_unset_events(descriptor, POLLER_OUT);
+			reset_trigger(cn);
 			return;
 		case SSL_CHECK_BASIC:
 			if ((err = SSL_get_verify_result(cn->ssl_h))
@@ -207,13 +204,10 @@ static void connection_sslize(connection_t *cn)
 				      "Certificate check failed: %s (%d)!",
 				      X509_verify_cert_error_string(err), err);
 				cn->connected = CONN_UNTRUSTED;
-				descriptor_set_events(descriptor, POLLER_IN);
-				descriptor_unset_events(descriptor, POLLER_OUT);
+				reset_trigger(cn);
 				return;
 			}
 			cn->connected = CONN_OK;
-			descriptor_set_events(descriptor, POLLER_IN);
-			descriptor_unset_events(descriptor, POLLER_OUT);
 			break;
 		case SSL_CHECK_CA:
 			if ((err = SSL_get_verify_result(cn->ssl_h))
@@ -222,13 +216,10 @@ static void connection_sslize(connection_t *cn)
 				      "Certificate check failed: %s (%d)!",
 				      X509_verify_cert_error_string(err), err);
 				cn->connected = CONN_UNTRUSTED;
-				descriptor_set_events(descriptor, POLLER_IN);
-				descriptor_unset_events(descriptor, POLLER_OUT);
+				reset_trigger(cn);
 				return;
 			}
 			cn->connected = CONN_OK;
-			descriptor_set_events(descriptor, POLLER_IN);
-			descriptor_unset_events(descriptor, POLLER_OUT);
 			break;
 		default:
 			fatal("Unknown ssl_check_mode");
@@ -243,6 +234,7 @@ static void connection_sslize(connection_t *cn)
 		break;
 	}
 	} // switch
+	reset_trigger(cn);
 }
 #endif
 
@@ -314,7 +306,7 @@ void real_read_all(connection_t *cn)
 	if (cn->incoming_lines == NULL)
 		cn->incoming_lines = list_new(list_ptr_cmp);
 	data_find_lines(cn);
-	maybe_trigger_read_event(cn);
+	reset_trigger(cn);
 }
 
 static void connection_client_on_out(void *data)
@@ -326,8 +318,6 @@ static void connection_client_on_out(void *data)
 		connection_close(cn);
 		return;
 	}
-	descriptor_t *descriptor =
-		poller_get_descriptor(global_poller(), cn->handle);
 	switch (cn->connected) {
 	case CONN_INPROGRESS: {
 		int optval = -1;
@@ -352,6 +342,7 @@ static void connection_client_on_out(void *data)
 				mylog(LOG_ERROR,
 				      "unable to associate FD to SSL "
 				      "structure");
+				connection_close(cn);
 				cn->connected = CONN_ERROR;
 				return;
 			}
@@ -359,14 +350,7 @@ static void connection_client_on_out(void *data)
 		}
 #endif
 		cn->connected = CONN_OK;
-		descriptor_unset_events(descriptor, POLLER_OUT);
-		descriptor_set_events(descriptor, POLLER_IN);
-		{
-			char *dbgs = descriptor_dbg_string(descriptor);
-			log(LOG_DEBUG, "fd: %d, Connected: %s", cn->handle,
-			    dbgs);
-			free(dbgs);
-		}
+		reset_trigger(cn);
 		return;
 	}
 	case CONN_OK:
@@ -378,11 +362,11 @@ static void connection_client_on_out(void *data)
 		break;
 	case CONN_SSL_NEED_RETRY_WRITE:
 		assert(cn->ssl_ctx_h);
-		assert(cn->partial != NULL);
 		real_write_all(cn);
 		break;
 	case CONN_SSL_NEED_RETRY_READ:
 		assert(cn->ssl_ctx_h);
+		real_write_all(cn);
 		real_read_all(cn);
 		break;
 #endif
@@ -481,7 +465,7 @@ static void connect_trynext(connection_t *cn)
 		cn->connecting_data->cur = cur->ai_next;
 		cn->connect_time = time(NULL);
 		cn->connected = CONN_INPROGRESS;
-		descriptor_set_events(descriptor, POLLER_OUT);
+		reset_trigger_force_write(cn);
 		return;
 	}
 
@@ -527,31 +511,18 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 		int err = SSL_get_error(cn->ssl_h, count);
 		switch (err) {
 		case SSL_ERROR_WANT_READ:
-			descriptor_set_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_IN);
-			descriptor_unset_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_OUT);
 			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
+			reset_trigger(cn);
 			return WRITE_KEEP;
 		case SSL_ERROR_WANT_WRITE:
-			descriptor_unset_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_IN);
-			descriptor_set_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_OUT);
 			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
+			reset_trigger_force_write(cn);
 			return WRITE_KEEP;
 		default:
 			connection_close(cn);
 			return WRITE_ERROR;
 		}
+		reset_trigger(cn);
 		return WRITE_KEEP;
 	}
 	if (count != size) {
@@ -560,9 +531,7 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 		log(LOG_DEBUG, "only %d written while message length is %d",
 		    count, size);
 	}
-
-	descriptor_unset_events(
-		poller_get_descriptor(global_poller(), cn->handle), POLLER_OUT);
+	reset_trigger(cn);
 	return WRITE_OK;
 }
 
@@ -678,11 +647,8 @@ static void real_write_all(connection_t *cn)
 	if (cn == NULL)
 		fatal("real_write_all: wrong arguments");
 
-	descriptor_t *descriptor =
-		poller_get_descriptor(global_poller(), cn->handle);
-
 	if (cn->partial == NULL && list_is_empty(cn->outgoing)) {
-		maybe_trigger_write_event(cn);
+		reset_trigger(cn);
 		return;
 	}
 
@@ -714,39 +680,30 @@ static void real_write_all(connection_t *cn)
 			break;
 		}
 	} while ((line = list_remove_first(cn->outgoing)));
-	maybe_trigger_write_event(cn);
+	reset_trigger(cn);
 }
 
-static void maybe_trigger_read_event(connection_t *cn)
+static void reset_trigger_force_write(connection_t *cn)
 {
-	log(LOG_DEBUG, "fd: %d, maybe_trigger_read_event %d", cn->handle,
-	    cn->connected);
-	if (cn->connected == CONN_SSL_NEED_RETRY_READ
-	    || cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
-		return;
-	}
+	// TODO: unset all in error states
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
+	descriptor_set_events(descriptor, POLLER_OUT);
 	descriptor_set_events(descriptor, POLLER_IN);
 }
 
-static void maybe_trigger_write_event(connection_t *cn)
+static void reset_trigger(connection_t *cn)
 {
-	if (cn->connected == CONN_SSL_NEED_RETRY_READ
-	    || cn->connected == CONN_SSL_NEED_RETRY_WRITE) {
-		return;
-	}
+	// TODO: unset all in error states
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
+	log(LOG_DEBUG, "%d %d", cn->token, connection_want_write(cn));
 	if (cn->partial != NULL || connection_want_write(cn)) {
-		char *first = "";
-		if (!list_is_empty(cn->outgoing)) {
-			first = list_get_first(cn->outgoing);
-		}
-		descriptor_set_events(descriptor, POLLER_OUT);
-	} else {
-		descriptor_unset_events(descriptor, POLLER_OUT);
+		reset_trigger_force_write(cn);
+		return;
 	}
+	descriptor_unset_events(descriptor, POLLER_OUT);
+	descriptor_set_events(descriptor, POLLER_IN);
 }
 
 /*
@@ -757,19 +714,19 @@ void write_line_fast(connection_t *cn, char *line)
 	int r;
 	char *nline = bip_strdup(line);
 	list_add_first(cn->outgoing, nline);
-	maybe_trigger_write_event(cn);
+	reset_trigger(cn);
 }
 
 void write_lines(connection_t *cn, list_t *lines)
 {
 	list_append(cn->outgoing, lines);
-	maybe_trigger_write_event(cn);
+	reset_trigger(cn);
 }
 
 void write_line(connection_t *cn, char *line)
 {
 	list_add_last(cn->outgoing, bip_strdup(line));
-	maybe_trigger_write_event(cn);
+	reset_trigger(cn);
 }
 
 list_t *read_lines(connection_t *cn, int *error)
@@ -807,7 +764,8 @@ list_t *read_lines(connection_t *cn, int *error)
 static int read_socket_SSL(connection_t *cn)
 {
 	int max, count;
-	log(LOG_DEBUG, "fd: %d, %d", cn->handle, cn->incoming_end);
+	log(LOG_DEBUG, "fd: %d, read_socket_SSL %d, %d", cn->handle,
+	    cn->incoming_end, cn->connected);
 	max = CONN_BUFFER_SIZE - cn->incoming_end;
 	if (cn->ssl_client && cn->cert == NULL) {
 		cn->cert = mySSL_get_cert(cn->ssl_h);
@@ -824,19 +782,13 @@ static int read_socket_SSL(connection_t *cn)
 		if (err == SSL_ERROR_WANT_READ) {
 			log(LOG_DEBUG, "fd: %d, read want read", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
-			descriptor_set_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_IN);
+			reset_trigger(cn);
 			return READ_OK;
 		}
 		if (err == SSL_ERROR_WANT_WRITE) {
 			log(LOG_DEBUG, "fd: %d, read want write", cn->handle);
 			cn->connected = CONN_SSL_NEED_RETRY_READ;
-			descriptor_set_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_OUT);
+			reset_trigger_force_write(cn);
 			return READ_OK;
 		}
 		mylog(LOG_ERROR, "fd %d: Connection error", cn->handle);
@@ -864,10 +816,7 @@ static int read_socket(connection_t *cn)
 	count = read(cn->handle, cn->incoming + cn->incoming_end, max);
 	if (count < 0) {
 		if (errno == EAGAIN || errno == EINTR || errno == EINPROGRESS) {
-			descriptor_set_events(
-				poller_get_descriptor(global_poller(),
-						      cn->handle),
-				POLLER_IN);
+			reset_trigger(cn);
 			return READ_OK;
 		}
 		mylog(LOG_ERROR, "read(fd=%d): Connection error: %s",
@@ -967,7 +916,9 @@ int cn_is_connected(connection_t *cn)
 {
 	if (cn == NULL)
 		fatal("cn_is_connected, wrong argument");
-	return (cn->connected == CONN_OK ? 1 : 0);
+	return (cn->connected == CONN_OK
+		|| cn->connected == CONN_SSL_NEED_RETRY_WRITE
+		|| cn->connected == CONN_SSL_NEED_RETRY_READ);
 }
 
 static void connection_save_endpoints(connection_t *c)
@@ -987,47 +938,19 @@ static void connection_save_endpoints(connection_t *c)
 #define TOKEN_MAX 4
 #define TOKEN_INTERVAL 1200
 
+
 static int connection_want_write(connection_t *cn)
 {
-	if (cn->anti_flood) {
-		struct timespec tv;
-		unsigned long now;
-
-		/* fill the bucket */
-		/* we do not control when we are called */
-		/* now is the number of milliseconds since the Epoch,
-		 * cn->lasttoken is the number of milliseconds when we
-		 * last added a token to the bucket */
-		if (!clock_gettime(CLOCK_MONOTONIC, &tv)) {
-			now = tv.tv_sec * 1000 + tv.tv_nsec / 1000000;
-			/* round now to TOKEN_INTERVAL multiple */
-			now -= now % TOKEN_INTERVAL;
-			if (now < cn->lasttoken) {
-				/* time shift or integer overflow */
-				cn->token = 1;
-				cn->lasttoken = now;
-			} else if (now > cn->lasttoken + TOKEN_INTERVAL) {
-				cn->token +=
-					(now - cn->lasttoken) / TOKEN_INTERVAL;
-				if (cn->token > TOKEN_MAX)
-					cn->token = TOKEN_MAX;
-				if (!cn->token)
-					cn->token = 1;
-				cn->lasttoken = now;
-			}
-		} else
-			/* if clock_gettime() fails, juste ignore
-			 * antiflood */
-			cn->token = 1;
-
-		/* use a token if needed and available */
-		if (!list_is_empty(cn->outgoing) && cn->token > 0) {
-			cn->token--;
-			return 1;
-		}
+	if (list_is_empty(cn->outgoing)) {
 		return 0;
 	}
-	return !list_is_empty(cn->outgoing);
+	if (!cn->anti_flood) {
+		return 1;
+	}
+	if (cn->token > 0) {
+		return 1;
+	}
+	return 0;
 }
 
 void increment_pointee(void *data)
@@ -1044,10 +967,10 @@ void wait_event(list_t *listeners_list, list_t *cn_list, int *msec)
 	global_poller()->data = &timedout;
 
 	struct timespec before;
-	poller_gettime(&before);
+	bip_gettime(&before);
 	poller_wait(global_poller(), *msec);
 	struct timespec after;
-	poller_gettime(&after);
+	bip_gettime(&after);
 	if (timedout) {
 		*msec = 0;
 	} else {

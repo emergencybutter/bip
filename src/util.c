@@ -870,3 +870,25 @@ void hash_binary(char *hex, unsigned char **password, unsigned int *seed)
 	MAYFREE(*password);
 	*password = md5;
 }
+
+
+void bip_gettime(struct timespec *time)
+{
+	int errtime = clock_gettime(CLOCK_MONOTONIC, time);
+	if (errtime != 0) {
+		fatal("clock_gettime: %s", strerror(errno));
+	}
+}
+
+int bip_duration_ms(struct timespec *to, struct timespec *from)
+{
+	if (to->tv_sec - from->tv_sec >= (INT_MAX / 1000)) {
+		return INT_MAX;
+	}
+	if (to->tv_sec - from->tv_sec <= (INT_MIN / 1000)) {
+		return INT_MIN;
+	}
+	int ms = to->tv_sec - from->tv_sec * 1000;
+	ms += (to->tv_nsec - from->tv_nsec) / 1000000;
+	return ms;
+}

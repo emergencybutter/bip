@@ -745,14 +745,10 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 		return ERR_AUTH;
 	}
 
-	log(LOG_DEBUG, "authing %s", ic->init_pass);
-
 	list_iterator_t it;
 	for (list_it_init(&bip->link_list, &it); list_it_item(&it);
 	     list_it_next(&it)) {
 		struct link *l = list_it_item(&it);
-		log(LOG_DEBUG, "Found %s %s, %s %s", user, l->user->name,
-		    connname, l->name);
 		if (strcmp(user, l->user->name) == 0
 		    && strcmp(connname, l->name) == 0) {
 			if (chash_cmp(pass, l->user->password, l->user->seed)
@@ -2549,7 +2545,7 @@ void irc_one_shot(bip_t *bip, int timeleft)
 	for (list_it_init(&bip->conn_list, &it); (conn = list_it_item(&it));
 	     list_it_next(&it)) {
 		if (TYPE((struct link_any *)conn->user_data) == IRC_TYPE_SERVER
-		    && conn->connected != CONN_OK) {
+		    && !cn_is_connected(conn)) {
 			list_add_first(&not_ok_conns, conn);
 		}
 	}
@@ -2557,8 +2553,7 @@ void irc_one_shot(bip_t *bip, int timeleft)
 	for (list_it_init(&bip->conn_list, &it); (conn = list_it_item(&it));
 	     list_it_next(&it)) {
 		if (TYPE((struct link_any *)conn->user_data) == IRC_TYPE_SERVER
-		    && conn->connected == CONN_OK
-		    && list_get(&not_ok_conns, conn)) {
+		    && cn_is_connected(conn) && list_get(&not_ok_conns, conn)) {
 			list_remove(&not_ok_conns, conn);
 			irc_server_startup(conn->user_data);
 		}
@@ -2601,10 +2596,10 @@ void irc_main(bip_t *bip)
 	}
 
 	struct timespec loop_start;
-	poller_gettime(&loop_start);
+	bip_gettime(&loop_start);
 	while (!sighup) {
 		struct timespec now;
-		poller_gettime(&now);
+		bip_gettime(&now);
 		timeleft -= (now.tv_sec - loop_start.tv_sec) * 1000
 			    + (now.tv_nsec - loop_start.tv_nsec) / 1000000;
 		if (timeleft < 0) {
