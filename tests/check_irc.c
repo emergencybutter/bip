@@ -367,6 +367,16 @@ void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 		   "R::servername 001 nick0 :Welcome nick0");
 	array_push(&client.proxy_replay_lines,
 		   "R::servername 376 nick0 :End of /MOTD command.");
+
+	while (list_count(&bip.connecting_client_list) != 1) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+	}
+	ck_assert_int_eq(1, list_count(&bip.connecting_client_list));
+	struct link_client *ic = list_get_first(&bip.connecting_client_list);
+	connection_t *proxy_connecting_client_conn = CONN(ic);
+
 	while (client.connection->connected != CONN_OK) {
 		irc_one_shot(&bip, 10);
 		irc_test_server_process(&server);
@@ -375,9 +385,6 @@ void test_proxy_and_client_connects_opt(int server_ssl, int client_ssl)
 		    client.connection->connected);
 	}
 	log(LOG_INFO, "Client connected to proxy tcp&ssl");
-	ck_assert_int_eq(1, list_count(&bip.connecting_client_list));
-	struct link_client *ic = list_get_first(&bip.connecting_client_list);
-	connection_t *proxy_connecting_client_conn = CONN(ic);
 	ck_assert(proxy_connecting_client_conn != NULL);
 	while (proxy_connecting_client_conn->connected != CONN_OK) {
 		irc_one_shot(&bip, 10);
