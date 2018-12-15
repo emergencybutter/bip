@@ -27,6 +27,9 @@ START_TEST(test_connection_basic)
 
 	ck_assert_int_eq(client->connected, CONN_INPROGRESS);
 	poller_wait(global_poller(), msec);
+	while (list_is_empty(&server->accepted_connections)) {
+		poller_wait(global_poller(), msec);
+	}
 	ck_assert(!list_is_empty(&server->accepted_connections));
 	connection_t *receiving_end =
 		list_remove_first(&server->accepted_connections);
