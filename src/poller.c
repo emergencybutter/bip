@@ -94,14 +94,15 @@ void descriptor_unset_events(descriptor_t *descriptor, poller_event_t events)
 	descriptor->events &= ~events;
 }
 
-void poller_wait(poller_t *p, int timeout)
+void poller_wait(poller_t *poller, int timeout)
 {
 	int tentative_num_fds = 16;
 	struct pollfd *fds =
 		bip_malloc(sizeof(struct pollfd) * tentative_num_fds);
 	hash_iterator_t hi;
 	int num_fds = 0;
-	for (hash_it_init(&p->fds, &hi); hash_it_item(&hi); hash_it_next(&hi)) {
+	for (hash_it_init(&poller->fds, &hi); hash_it_item(&hi);
+	     hash_it_next(&hi)) {
 		descriptor_t *descriptor = hash_it_item(&hi);
 		if (descriptor->removed) {
 			log(LOG_DEBUG, "Removing: %d", descriptor->fd);
@@ -136,7 +137,8 @@ void poller_wait(poller_t *p, int timeout)
 	int *removed_fds = bip_malloc(sizeof(int) * num_fds);
 	int num_removed_fds = 0;
 	for (int i = 0; i < num_fds; i++) {
-		descriptor_t *descriptor = poller_get_descriptor(p, fds[i].fd);
+		descriptor_t *descriptor =
+			poller_get_descriptor(poller, fds[i].fd);
 		if (fds[i].revents & POLLIN)
 			descriptor->on_in(descriptor->data);
 		if (!descriptor->removed && (fds[i].revents & POLLOUT))
@@ -144,7 +146,7 @@ void poller_wait(poller_t *p, int timeout)
 		if (!descriptor->removed && (fds[i].revents & POLLHUP))
 			descriptor->on_hup(descriptor->data);
 		if (descriptor->removed) {
-			poller_unregister_finalize(p, descriptor->fd);
+			poller_unregister_finalize(poller, descriptor->fd);
 		}
 	}
 	free(fds);

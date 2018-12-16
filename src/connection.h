@@ -52,8 +52,6 @@
 #define CONN_NEW 7
 #define CONN_UNTRUSTED 9
 #define CONN_SSL_CONNECT 10
-#define CONN_SSL_NEED_RETRY_WRITE 11
-#define CONN_SSL_NEED_RETRY_READ 12
 
 #define WRITE_OK 0
 #define WRITE_ERROR -1
@@ -92,7 +90,6 @@ typedef struct connection {
 	unsigned token;
 	int handle;
 	int connected;
-	int listening;
 	int ssl_client;
 	time_t connect_time;
 	time_t timeout;
@@ -111,6 +108,8 @@ typedef struct connection {
 	int ssl_check_mode;
 	char *localip, *remoteip;
 	uint16_t localport, remoteport;
+	int listening : 1;
+	int need_write : 1;
 } connection_t;
 
 #define LISTEN_OK 1

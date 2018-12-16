@@ -48,8 +48,8 @@ static int connection_want_write(connection_t *cn);
 #ifdef HAVE_LIBSSL
 static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options);
 #endif
-static void reset_trigger_force_write(connection_t *cn);
 static void reset_trigger(connection_t *cn);
+static void connect_trynext(connection_t *cn);
 
 void listener_ssl_options_init(listener_ssl_options_t *options)
 {
@@ -110,8 +110,14 @@ void connection_free(connection_t *cn)
 			free(l);
 		list_free(cn->outgoing);
 	}
-	if (cn->incoming_lines)
+	if (cn->incoming_lines) {
+		char *l;
+		while ((l = list_remove_first(cn->incoming_lines))) {
+			log(LOG_WARN, "Closing connection with buffer: %s", l);
+			free(l);
+		}
 		list_free(cn->incoming_lines);
+	}
 	if (cn->incoming)
 		free(cn->incoming);
 	if (cn->connecting_data)
@@ -147,7 +153,8 @@ void connection_free(connection_t *cn)
 // Turns either a new client or a newly accepted socket to an SSL socket.
 static void connection_sslize(connection_t *cn)
 {
-	log(LOG_DEBUG, "fd: %d, connection_sslize", cn->handle);
+	log(LOG_DEBUG, "fd: %d, connection_sslize %d", cn->handle,
+	    cn->ssl_client);
 
 	descriptor_t *descriptor =
 		poller_get_descriptor(global_poller(), cn->handle);
@@ -161,22 +168,26 @@ static void connection_sslize(connection_t *cn)
 	ssl_err = SSL_get_error(cn->ssl_h, err);
 	switch (ssl_err) {
 	case SSL_ERROR_WANT_READ:
-		reset_trigger(cn);
 		break;
 	case SSL_ERROR_WANT_WRITE:
-		reset_trigger_force_write(cn);
+		cn->need_write = 1;
 		break;
 	case SSL_ERROR_ZERO_RETURN:
-	case SSL_ERROR_SSL:
-	case SSL_ERROR_SYSCALL: {
-		char buf[256];
-		mylog(LOG_ERROR, "Error in SSL handshake. %s",
-		      ERR_error_string(ssl_err, buf));
+		mylog(LOG_ERROR, "SSL_ERROR_ZERO_RETURN during handshake");
 		connection_close(cn);
 		cn->connected = CONN_ERROR;
 		break;
-	}
+	case SSL_ERROR_SSL:
+		mylog(LOG_ERROR, "SSL_ERROR_SSL during handshake");
+		connection_close(cn);
+		cn->connected = CONN_ERROR;
+		break;
+	case SSL_ERROR_SYSCALL:
+		mylog(LOG_ERROR, "SSL_ERROR_SYSCALL during handshake");
+		connection_close(cn);
+		break;
 	case SSL_ERROR_NONE: {
+		log(LOG_DEBUG, "none");
 		const SSL_CIPHER *cipher;
 		char buf[128];
 		int len;
@@ -195,8 +206,7 @@ static void connection_sslize(connection_t *cn)
 		case SSL_CHECK_NONE:
 			log(LOG_DEBUG, "fd: %d, connected (SSL)", cn->handle);
 			cn->connected = CONN_OK;
-			reset_trigger(cn);
-			return;
+			break;
 		case SSL_CHECK_BASIC:
 			if ((err = SSL_get_verify_result(cn->ssl_h))
 			    != X509_V_OK) {
@@ -204,8 +214,7 @@ static void connection_sslize(connection_t *cn)
 				      "Certificate check failed: %s (%d)!",
 				      X509_verify_cert_error_string(err), err);
 				cn->connected = CONN_UNTRUSTED;
-				reset_trigger(cn);
-				return;
+				break;
 			}
 			cn->connected = CONN_OK;
 			break;
@@ -216,8 +225,7 @@ static void connection_sslize(connection_t *cn)
 				      "Certificate check failed: %s (%d)!",
 				      X509_verify_cert_error_string(err), err);
 				cn->connected = CONN_UNTRUSTED;
-				reset_trigger(cn);
-				return;
+				break;
 			}
 			cn->connected = CONN_OK;
 			break;
@@ -227,10 +235,7 @@ static void connection_sslize(connection_t *cn)
 		break;
 	}
 	default: {
-		char buf[256];
-		ERR_error_string_n(ssl_err, buf, 255);
-		buf[255] = 0;
-		fatal("Unknown SSL Error: %d, %d, %s", err, ssl_err, buf);
+		fatal("Unknown SSL Error: %d, %d.", err, ssl_err);
 		break;
 	}
 	} // switch
@@ -270,17 +275,9 @@ static void connection_client_on_in(void *data)
 	case CONN_SSL_CONNECT:
 		connection_sslize(cn);
 		break;
-	case CONN_SSL_NEED_RETRY_WRITE:
-		assert(cn->ssl_ctx_h);
-		assert(cn->partial != NULL);
-		real_write_all(cn);
-		break;
-	case CONN_SSL_NEED_RETRY_READ:
-		assert(cn->ssl_ctx_h);
-		real_read_all(cn);
-		break;
 #endif
 	case CONN_OK:
+		real_write_all(cn);
 		real_read_all(cn);
 		log(LOG_DEBUG, "fd: %d, num lines after read: %d", cn->handle,
 		    list_count(cn->incoming_lines));
@@ -312,6 +309,7 @@ void real_read_all(connection_t *cn)
 static void connection_client_on_out(void *data)
 {
 	connection_t *cn = data;
+	cn->need_write = 0;
 	if (cn_is_in_error(cn)) {
 		mylog(LOG_ERROR, "Error on fd %d (state %d)", cn->handle,
 		      cn->connected);
@@ -337,7 +335,7 @@ static void connection_client_on_out(void *data)
 #ifdef HAVE_LIBSSL
 		if (cn->ssl_ctx_h) {
 			cn->connected = CONN_SSL_CONNECT;
-			// Leave the POLLER_OUT event listener.
+			cn->need_write = 1;
 			if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
 				mylog(LOG_ERROR,
 				      "unable to associate FD to SSL "
@@ -350,29 +348,21 @@ static void connection_client_on_out(void *data)
 		}
 #endif
 		cn->connected = CONN_OK;
-		reset_trigger(cn);
-		return;
+		break;
 	}
 	case CONN_OK:
 		real_write_all(cn);
+		real_read_all(cn);
 		break;
 #ifdef HAVE_LIBSSL
 	case CONN_SSL_CONNECT:
 		connection_sslize(cn);
 		break;
-	case CONN_SSL_NEED_RETRY_WRITE:
-		assert(cn->ssl_ctx_h);
-		real_write_all(cn);
-		break;
-	case CONN_SSL_NEED_RETRY_READ:
-		assert(cn->ssl_ctx_h);
-		real_write_all(cn);
-		real_read_all(cn);
-		break;
 #endif
 	default:
 		fatal("Unknown client connect state: %d", cn->connected);
 	}
+	reset_trigger(cn);
 }
 
 static void connection_client_on_hup(void *data)
@@ -465,7 +455,8 @@ static void connect_trynext(connection_t *cn)
 		cn->connecting_data->cur = cur->ai_next;
 		cn->connect_time = time(NULL);
 		cn->connected = CONN_INPROGRESS;
-		reset_trigger_force_write(cn);
+		cn->need_write = 1;
+		reset_trigger(cn);
 		return;
 	}
 
@@ -511,12 +502,11 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 		int err = SSL_get_error(cn->ssl_h, count);
 		switch (err) {
 		case SSL_ERROR_WANT_READ:
-			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
 			reset_trigger(cn);
 			return WRITE_KEEP;
 		case SSL_ERROR_WANT_WRITE:
-			cn->connected = CONN_SSL_NEED_RETRY_WRITE;
-			reset_trigger_force_write(cn);
+			cn->need_write = 1;
+			reset_trigger(cn);
 			return WRITE_KEEP;
 		default:
 			connection_close(cn);
@@ -539,16 +529,6 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 #define X509_OBJECT_get0_X509(o) ((o)->data.x509)
 #define X509_STORE_CTX_get_by_subject(vs, type, name, ret)                     \
 	X509_STORE_get_by_subject(vs, type, name, ret)
-
-int DH_set0_pqg(DH *dh, BIGNUM *p, BIGNUM *q, BIGNUM *g)
-{
-	// bip doesn't use q parameter
-	assert(q == NULL);
-	dh->p = p;
-	dh->g = g;
-
-	return 1;
-}
 
 X509_OBJECT *X509_OBJECT_new()
 {
@@ -683,26 +663,18 @@ static void real_write_all(connection_t *cn)
 	reset_trigger(cn);
 }
 
-static void reset_trigger_force_write(connection_t *cn)
-{
-	// TODO: unset all in error states
-	descriptor_t *descriptor =
-		poller_get_descriptor(global_poller(), cn->handle);
-	descriptor_set_events(descriptor, POLLER_OUT);
-	descriptor_set_events(descriptor, POLLER_IN);
-}
-
 static void reset_trigger(connection_t *cn)
 {
-	// TODO: unset all in error states
-	descriptor_t *descriptor =
-		poller_get_descriptor(global_poller(), cn->handle);
-	log(LOG_DEBUG, "%d %d", cn->token, connection_want_write(cn));
-	if (cn->partial != NULL || connection_want_write(cn)) {
-		reset_trigger_force_write(cn);
+	if (cn->handle == -1) {
 		return;
 	}
-	descriptor_unset_events(descriptor, POLLER_OUT);
+	descriptor_t *descriptor =
+		poller_get_descriptor(global_poller(), cn->handle);
+	if (connection_want_write(cn) || cn->need_write) {
+		descriptor_set_events(descriptor, POLLER_OUT);
+	} else {
+		descriptor_unset_events(descriptor, POLLER_OUT);
+	}
 	descriptor_set_events(descriptor, POLLER_IN);
 }
 
@@ -753,7 +725,7 @@ list_t *read_lines(connection_t *cn, int *error)
 		cn->incoming_lines = list_new(list_ptr_cmp);
 		break;
 	default:
-		fatal("internal error 8");
+		fatal("fd: %d: bad state: %d", cn->handle, cn->connected);
 		break;
 	}
 	return ret;
@@ -781,14 +753,13 @@ static int read_socket_SSL(connection_t *cn)
 		int err = SSL_get_error(cn->ssl_h, count);
 		if (err == SSL_ERROR_WANT_READ) {
 			log(LOG_DEBUG, "fd: %d, read want read", cn->handle);
-			cn->connected = CONN_SSL_NEED_RETRY_READ;
 			reset_trigger(cn);
 			return READ_OK;
 		}
 		if (err == SSL_ERROR_WANT_WRITE) {
 			log(LOG_DEBUG, "fd: %d, read want write", cn->handle);
-			cn->connected = CONN_SSL_NEED_RETRY_READ;
-			reset_trigger_force_write(cn);
+			cn->need_write = 1;
+			reset_trigger(cn);
 			return READ_OK;
 		}
 		mylog(LOG_ERROR, "fd %d: Connection error", cn->handle);
@@ -800,8 +771,6 @@ static int read_socket_SSL(connection_t *cn)
 		return READ_ERROR;
 	}
 
-	// Maybe a CONN_SSL_NEED_RETRY_READ succeeded.
-	cn->connected = CONN_OK;
 	cn->incoming_end += count;
 	return READ_OK;
 }
@@ -903,8 +872,6 @@ static int cn_is_in_error(connection_t *cn)
 	case CONN_INPROGRESS:
 	case CONN_OK:
 	case CONN_SSL_CONNECT:
-	case CONN_SSL_NEED_RETRY_WRITE:
-	case CONN_SSL_NEED_RETRY_READ:
 		return 0;
 	default:
 		fatal("internal error 10");
@@ -916,9 +883,7 @@ int cn_is_connected(connection_t *cn)
 {
 	if (cn == NULL)
 		fatal("cn_is_connected, wrong argument");
-	return (cn->connected == CONN_OK
-		|| cn->connected == CONN_SSL_NEED_RETRY_WRITE
-		|| cn->connected == CONN_SSL_NEED_RETRY_READ);
+	return (cn->connected == CONN_OK);
 }
 
 static void connection_save_endpoints(connection_t *c)
@@ -1218,7 +1183,6 @@ connection_t *accept_new(listener_t *listener)
 			return conn;
 		}
 		SSL_set_accept_state(conn->ssl_h);
-		// conn->connected = CONN_SSL_CONNECT;
 	}
 #endif
 	return conn;
@@ -1364,7 +1328,6 @@ static SSL_CTX *listener_ssl_context(listener_ssl_options_t *options)
 		}
 	}
 
-	log(LOG_DEBUG, "file: %s", options->cert_pem_file);
 	if (!SSL_CTX_use_certificate_chain_file(sslctx, options->cert_pem_file))
 		mylog(LOG_WARN, "SSL: Unable to load certificate file");
 	if (!SSL_CTX_use_PrivateKey_file(sslctx, options->cert_pem_file,

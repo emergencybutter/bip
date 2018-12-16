@@ -2065,7 +2065,7 @@ static void server_setup_reconnect_timer(struct link *link)
 		if (timer > RECONN_TIMER_MAX)
 			timer = RECONN_TIMER_MAX;
 	}
-	mylog(LOG_ERROR, "[%s] reconnecting in %d seconds", link->name, timer);
+	mylog(LOG_INFO, "[%s] reconnecting in %d seconds", link->name, timer);
 	link->recon_timer = timer;
 }
 
@@ -2419,11 +2419,20 @@ void bip_tick(bip_t *bip)
 	for (list_it_init(&bip->link_list, &li); (link = list_it_item(&li));
 	     list_it_next(&li)) {
 		if (link->l_server) {
-			if (irc_server_lag_compute(link)) {
+			if (CONN(link->l_server)->connected == CONN_DISCONN
+			    || CONN(link->l_server)->connected == CONN_ERROR) {
+				list_remove(&bip->conn_list,
+					    CONN(link->l_server));
+				irc_close((struct link_any *)link->l_server);
+				continue;
+			}
+			if (CONN(link->l_server)->connected == CONN_OK
+			    && irc_server_lag_compute(link)) {
 				log_ping_timeout(link->log);
 				list_remove(&bip->conn_list,
 					    CONN(link->l_server));
 				irc_close((struct link_any *)link->l_server);
+				continue;
 			}
 		} else {
 			if (link->recon_timer == 0) {
