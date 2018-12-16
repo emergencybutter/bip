@@ -88,8 +88,8 @@ static void connecting_data_free(struct connecting_data *t)
 
 void connection_close(connection_t *cn)
 {
-	log(LOG_DEBUG, "Connection close. fd: %d (%d)", cn->handle,
-	    cn->connected);
+	mylog(LOG_DEBUG, "Connection close asked. FD:%d (status: %d)",
+			(long)cn->handle, cn->connected);
 	if (cn->connected != CONN_DISCONN && cn->connected != CONN_ERROR) {
 		cn->connected = CONN_DISCONN;
 		poller_unregister(global_poller(), cn->handle);
