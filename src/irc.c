@@ -761,8 +761,8 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 	}
 
 	if (!LINK(ic))
-		mylog(LOG_ERROR, "[%s] Invalid credentials (user: %s)",
-		      connname, user);
+		mylog(LOG_ERROR, "[%s] Invalid credentials (user: %s, %s, %s)",
+		      connname, user, pass, connname);
 	free(user);
 	free(connname);
 	free(pass);

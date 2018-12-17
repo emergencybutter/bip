@@ -132,10 +132,6 @@ void connection_free(connection_t *cn)
 		SSL_free(cn->ssl_h);
 		cn->ssl_h = NULL;
 	}
-	if (cn->ssl_ctx_h) {
-		SSL_CTX_free(cn->ssl_ctx_h);
-		cn->ssl_ctx_h = NULL;
-	}
 #endif
 	if (cn->localip) {
 		free(cn->localip);
@@ -281,6 +277,8 @@ static void connection_client_on_in(void *data)
 		log(LOG_DEBUG, "fd: %d, num lines after read: %d", cn->handle,
 		    list_count(cn->incoming_lines));
 		break;
+	case CONN_INPROGRESS:
+		break;
 	default:
 		fatal("Unknown connect state: %d", cn->connected);
 	}
@@ -290,7 +288,7 @@ void real_read_all(connection_t *cn)
 {
 	int ret;
 #ifdef HAVE_LIBSSL
-	if (cn->ssl_ctx_h)
+	if (cn->ssl_h)
 		ret = read_socket_SSL(cn);
 	else
 #endif
@@ -332,7 +330,7 @@ static void connection_client_on_out(void *data)
 		log(LOG_DEBUG, "fd: %d, Socket connected (TCP)", cn->handle);
 		connection_save_endpoints(cn);
 #ifdef HAVE_LIBSSL
-		if (cn->ssl_ctx_h) {
+		if (cn->ssl_h) {
 			cn->connected = CONN_SSL_CONNECT;
 			cn->need_write = 1;
 			if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
@@ -615,7 +613,7 @@ static int _write_socket(connection_t *cn, char *message)
 static int write_socket(connection_t *cn, char *line)
 {
 #ifdef HAVE_LIBSSL
-	if (cn->ssl_ctx_h)
+	if (cn->ssl_h)
 		return _write_socket_SSL(cn, line);
 	else
 #endif
@@ -1092,7 +1090,6 @@ static connection_t *connection_init(int timeout, int listen)
 	conn->ssl_client = 1;
 	conn->connecting_data = NULL;
 #ifdef HAVE_LIBSSL
-	conn->ssl_ctx_h = NULL;
 	conn->ssl_h = NULL;
 	conn->cert = NULL;
 	conn->ssl_check_mode = SSL_CHECK_NONE;
@@ -1176,7 +1173,6 @@ connection_t *accept_new(listener_t *listener)
 			connection_free(conn);
 			return NULL;
 		}
-		conn->ssl_ctx_h = listener->ssl_context;
 		if (!SSL_set_fd(conn->ssl_h, conn->handle)) {
 			mylog(LOG_ERROR,
 			      "unable to associate FD to SSL "
@@ -1426,13 +1422,14 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 					 int timeout)
 {
 	connection_t *conn;
+	SSL_CTX *ssl_ctx;
 	log(LOG_DEBUG,
 	    "_connection_new_SSL %d ssl_check_store: %s ssl_client_certfile: "
 	    "%s ",
 	    ssl_options->ssl_check_mode, ssl_options->ssl_check_store,
 	    ssl_options->ssl_client_certfile);
 	conn = connection_init(timeout, /*listen=*/0);
-	if (!(conn->ssl_ctx_h = connection_create_ssl_context(
+	if (!(ssl_ctx = connection_create_ssl_context(
 		      ssl_options->ssl_ciphers))) {
 		mylog(LOG_ERROR, "SSL context initialization failed");
 		return conn;
@@ -1444,7 +1441,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 	switch (conn->ssl_check_mode) {
 		struct stat st_buf;
 	case SSL_CHECK_BASIC:
-		if (!SSL_CTX_load_verify_locations(conn->ssl_ctx_h,
+		if (!SSL_CTX_load_verify_locations(ssl_ctx,
 						   ssl_options->ssl_check_store,
 						   NULL)) {
 			mylog(LOG_ERROR,
@@ -1454,7 +1451,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 		break;
 	case SSL_CHECK_CA:
 		if (!ssl_options->ssl_check_store) {
-			if (SSL_CTX_set_default_verify_paths(conn->ssl_ctx_h)) {
+			if (SSL_CTX_set_default_verify_paths(ssl_ctx)) {
 				mylog(LOG_INFO,
 				      "No SSL certificate check store "
 				      "configured. "
@@ -1472,7 +1469,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 		if (stat(ssl_options->ssl_check_store, &st_buf) == 0) {
 			if (st_buf.st_mode & S_IFDIR) {
 				if (!SSL_CTX_load_verify_locations(
-					    conn->ssl_ctx_h, NULL,
+					    ssl_ctx, NULL,
 					    ssl_options->ssl_check_store)) {
 					mylog(LOG_ERROR,
 					      "Can't assign check store to "
@@ -1483,7 +1480,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 			}
 			if (st_buf.st_mode & S_IFREG) {
 				if (!SSL_CTX_load_verify_locations(
-					    conn->ssl_ctx_h,
+					    ssl_ctx,
 					    ssl_options->ssl_check_store,
 					    NULL)) {
 					mylog(LOG_ERROR,
@@ -1507,15 +1504,15 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 
 	switch (conn->ssl_check_mode) {
 	case SSL_CHECK_NONE:
-		SSL_CTX_set_verify(conn->ssl_ctx_h, SSL_VERIFY_NONE, NULL);
+		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, NULL);
 		break;
 	case SSL_CHECK_BASIC:
-		SSL_CTX_set_verify(conn->ssl_ctx_h, SSL_VERIFY_PEER,
+		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER,
 				   bip_ssl_verify_callback);
-		/* SSL_CTX_set_verify_depth(conn->ssl_ctx_h, 0); */
+		/* SSL_CTX_set_verify_depth(ssl_ctx, 0); */
 		break;
 	case SSL_CHECK_CA:
-		SSL_CTX_set_verify(conn->ssl_ctx_h, SSL_VERIFY_PEER,
+		SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER,
 				   bip_ssl_verify_callback);
 		break;
 	default:
@@ -1524,10 +1521,10 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 
 	if (ssl_options->ssl_client_certfile) {
 		if (!SSL_CTX_use_certificate_chain_file(
-			    conn->ssl_ctx_h, ssl_options->ssl_client_certfile))
+			    ssl_ctx, ssl_options->ssl_client_certfile))
 			mylog(LOG_WARN, "SSL: Unable to load certificate file");
 		else if (!SSL_CTX_use_PrivateKey_file(
-				 conn->ssl_ctx_h,
+				 ssl_ctx,
 				 ssl_options->ssl_client_certfile,
 				 SSL_FILETYPE_PEM))
 			mylog(LOG_WARN, "SSL: Unable to load key file");
@@ -1538,7 +1535,8 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 			      ssl_options->ssl_client_certfile);
 	}
 
-	conn->ssl_h = SSL_new(conn->ssl_ctx_h);
+	conn->ssl_h = SSL_new(ssl_ctx);
+	SSL_CTX_free(ssl_ctx);
 	if (conn->ssl_h == NULL) {
 		mylog(LOG_ERROR, "Unable to allocate SSL structures");
 		return conn;
