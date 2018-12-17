@@ -14,12 +14,16 @@ extern int conf_log_level;
 
 extern void (*extra_callback_for_tests)(void *);
 extern void *extra_callback_for_tests_data;
+extern int default_items_per_sec;
+
 
 void init_test()
 {
 	conf_global_log_file = stderr;
 	conf_log_level = LOG_DEBUGTOOMUCH + 1;
 	signal(SIGPIPE, SIG_IGN);
+	// Get the anti flood out of the way.
+	default_items_per_sec = 1000000;
 }
 
 struct irc_test_server;

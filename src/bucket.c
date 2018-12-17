@@ -66,6 +66,10 @@ void bucket_init(bucket_t *bucket, int items_per_sec, int max_items)
 	bucket->max_items = max_items;
 	// Start with one second worth of items.
 	bucket->milli_items = items_per_sec * 1000;
+	if (bucket->milli_items / 1000 > bucket->max_items ||
+		bucket->milli_items < 0) {
+		bucket->milli_items = bucket->max_items * 1000;
+	}
 }
 
 int bucket_items(bucket_t *bucket) {

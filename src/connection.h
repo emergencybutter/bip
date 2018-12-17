@@ -16,6 +16,7 @@
 #include "config.h"
 #include "util.h"
 #include "poller.h"
+#include "bucket.h"
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/types.h>
@@ -85,9 +86,7 @@ void connection_ssl_options_init(connection_ssl_options_t *options);
 
 struct connecting_data;
 typedef struct connection {
-	int anti_flood;
-	unsigned long lasttoken;
-	unsigned token;
+	bucket_t bucket;
 	int handle;
 	int connected;
 	int ssl_client;
@@ -116,7 +115,6 @@ typedef struct connection {
 #define LISTEN_ERROR 2
 
 typedef struct listener {
-	int anti_flood;
 	int state;
 	int handle;
 	list_t accepted_connections;

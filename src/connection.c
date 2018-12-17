@@ -496,23 +496,23 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 			return WRITE_ERROR;
 		}
 	}
+	if (!bucket_try_remove(&cn->bucket, size)) {
+		return WRITE_KEEP;
+	}
 	count = SSL_write(cn->ssl_h, (const void *)message, size);
 	ERR_print_errors(errbio);
 	if (count <= 0) {
 		int err = SSL_get_error(cn->ssl_h, count);
 		switch (err) {
 		case SSL_ERROR_WANT_READ:
-			reset_trigger(cn);
 			return WRITE_KEEP;
 		case SSL_ERROR_WANT_WRITE:
 			cn->need_write = 1;
-			reset_trigger(cn);
 			return WRITE_KEEP;
 		default:
 			connection_close(cn);
 			return WRITE_ERROR;
 		}
-		reset_trigger(cn);
 		return WRITE_KEEP;
 	}
 	if (count != size) {
@@ -521,7 +521,6 @@ static int _write_socket_SSL(connection_t *cn, char *message)
 		log(LOG_DEBUG, "only %d written while message length is %d",
 		    count, size);
 	}
-	reset_trigger(cn);
 	return WRITE_OK;
 }
 
@@ -572,6 +571,10 @@ static int _write_socket(connection_t *cn, char *message)
 	if (size == 0) {
 		return WRITE_OK;
 	}
+	if (!bucket_try_remove(&cn->bucket, size)) {
+		return WRITE_KEEP;
+	}
+
 	/* loop if we wrote some data but not everything, or if error is
 	 * EINTR */
 	do {
@@ -598,6 +601,7 @@ static int _write_socket(connection_t *cn, char *message)
 	 */
 	if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS) {
 		memmove(message, message + tcount, size - tcount + 1);
+		bucket_add(&cn->bucket, size - tcount);
 		return WRITE_KEEP;
 	}
 	/* other errors, EPIPE or worse, close the connection, repport error */
@@ -900,22 +904,22 @@ static void connection_save_endpoints(connection_t *c)
 	    c->localip, c->localport, c->remoteip, c->remoteport);
 }
 
-#define TOKEN_MAX 4
-#define TOKEN_INTERVAL 1200
-
-
 static int connection_want_write(connection_t *cn)
 {
 	if (list_is_empty(cn->outgoing)) {
 		return 0;
 	}
-	if (!cn->anti_flood) {
-		return 1;
-	}
-	if (cn->token > 0) {
-		return 1;
+	if (cn->partial != NULL)
+		return bucket_contains(&cn->bucket, strlen(cn->partial));
+	if (!list_is_empty(cn->outgoing)) {
+		return bucket_contains(&cn->bucket,
+				       strlen(list_get_first(cn->outgoing)));
 	}
 	return 0;
+}
+
+void connection_tick(connection_t *connection) {
+	bucket_refill(&connection->bucket);
 }
 
 void increment_pointee(void *data)
@@ -1064,7 +1068,10 @@ static void create_listening_socket(char *hostname, char *port, listener_t *cn)
 	mylog(LOG_ERROR, "Unable to bind/listen");
 }
 
-static connection_t *connection_init(int anti_flood, int timeout, int listen)
+int default_items_per_sec = 70;
+int default_max_items = 70 * 3;
+
+static connection_t *connection_init(int timeout, int listen)
 {
 	connection_t *conn;
 	char *incoming;
@@ -1074,9 +1081,8 @@ static connection_t *connection_init(int anti_flood, int timeout, int listen)
 	incoming = (char *)bip_malloc(CONN_BUFFER_SIZE);
 	outgoing = list_new(NULL);
 
-	conn->anti_flood = anti_flood;
-	conn->lasttoken = 0;
-	conn->token = TOKEN_MAX;
+	bucket_init(&conn->bucket, default_items_per_sec,
+		    default_max_items);
 	conn->timeout = (listen ? 0 : timeout);
 	conn->connect_time = 0;
 	conn->incoming = incoming;
@@ -1150,8 +1156,7 @@ connection_t *accept_new(listener_t *listener)
 
 	socket_set_nonblock(handle);
 
-	conn = connection_init(listener->anti_flood, listener->timeout,
-			       /*listen=*/1);
+	conn = connection_init(listener->timeout, /*listen=*/1);
 	conn->connect_time = time(NULL);
 	conn->user_data = listener->user_data;
 	conn->handle = handle;
@@ -1200,7 +1205,6 @@ void listener_init(listener_t *listener, char *hostname, int port,
 		   listener_ssl_options_t *options)
 {
 	list_init(&listener->accepted_connections, list_ptr_cmp);
-	listener->anti_flood = 0;
 	listener->localip = strdup(hostname);
 	listener->localport = port;
 
@@ -1229,8 +1233,7 @@ static connection_t *_connection_new(char *dsthostname, char *dstport,
 {
 	connection_t *conn;
 
-	// TODO: enable anti_flood
-	conn = connection_init(/*anti_flood=*/1, timeout, /*listen=*/0);
+	conn = connection_init(timeout, /*listen=*/0);
 	create_socket(dsthostname, dstport, srchostname, srcport, conn);
 
 	return conn;
@@ -1431,7 +1434,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 	    "%s ",
 	    ssl_options->ssl_check_mode, ssl_options->ssl_check_store,
 	    ssl_options->ssl_client_certfile);
-	conn = connection_init(/*anti_flood=*/1, timeout, /*listen=*/0);
+	conn = connection_init(timeout, /*listen=*/0);
 	if (!(conn->ssl_ctx_h = connection_create_ssl_context(
 		      ssl_options->ssl_ciphers))) {
 		mylog(LOG_ERROR, "SSL context initialization failed");
