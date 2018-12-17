@@ -29,6 +29,10 @@ void _bucket_refill_at_time(bucket_t *bucket, struct timespec *now)
 
 void bucket_refill(bucket_t *bucket)
 {
+	log(LOG_DEBUG,
+	    "bucket, refilling from bucket with %d (max: %d)\n",
+	    bucket->milli_items, bucket->max_items);
+
 	struct timespec now;
 	bip_gettime(&now);
 	_bucket_refill_at_time(bucket, &now);
@@ -46,6 +50,9 @@ int bucket_contains(bucket_t *bucket, int items)
 int bucket_try_remove(bucket_t *bucket, int items)
 {
 	assert(items > 0);
+	log(LOG_DEBUG,
+	    "bucket, trying to remove %d from bucket with %d (max: %d)\n",
+	    items, bucket->milli_items, bucket->max_items);
 	if (bucket->milli_items / 1000 >= items) {
 		bucket->milli_items -= items * 1000;
 		return 1;
@@ -64,8 +71,8 @@ void bucket_init(bucket_t *bucket, int items_per_sec, int max_items)
 	bip_gettime(&bucket->last_bucket_refill_ts);
 	bucket->items_per_sec = items_per_sec;
 	bucket->max_items = max_items;
-	// Start with one second worth of items.
-	bucket->milli_items = items_per_sec * 1000;
+	// Start full.
+	bucket->milli_items = max_items * 1000;
 	if (bucket->milli_items / 1000 > bucket->max_items ||
 		bucket->milli_items < 0) {
 		bucket->milli_items = bucket->max_items * 1000;

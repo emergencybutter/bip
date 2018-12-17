@@ -570,6 +570,7 @@ static void write_init_string(connection_t *c, struct line *line, char *nick)
 	char *l;
 
 	l = irc_line_to_string_to(line, nick);
+	log(LOG_DEBUG, "Replaying %s", l);
 	write_line(c, l);
 	free(l);
 }
@@ -792,6 +793,7 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 				":irc.bip.net NOTICE pouet "
 				":ERROR Proxy not yet connected, try again "
 				"later\r\n");
+		real_write_all(CONN(ic));
 		unbind_from_link(ic);
 		free(init_nick);
 		return OK_CLOSE;
@@ -801,8 +803,9 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 	TYPE(ic) = IRC_TYPE_CLIENT;
 
 	for (list_it_init(&LINK(ic)->init_strings, &it); list_it_item(&it);
-	     list_it_next(&it))
+	     list_it_next(&it)) {
 		write_init_string(CONN(ic), list_it_item(&it), init_nick);
+	}
 
 	/* we change nick on server */
 	if (LINK(ic)->l_server) {
@@ -2410,6 +2413,12 @@ void bip_tick(bip_t *bip)
 	if (logflush_timer-- <= 0) {
 		logflush_timer = conf_log_sync_interval;
 		log_flush_all();
+	}
+
+	connection_t *conn;
+	for (list_it_init(&bip->conn_list, &li); (conn = list_it_item(&li));
+	     list_it_next(&li)) {
+		connection_tick(conn);
 	}
 
 	/* handle tick for links: detect lags or start a reconnection */

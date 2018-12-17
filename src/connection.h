@@ -155,5 +155,8 @@ char *connection_remoteip(connection_t *cn);
 poller_t *global_poller();
 
 void connection_ssl_initialize();
+void connection_tick(connection_t *connection);
+
+void real_write_all(connection_t *cn);
 
 #endif

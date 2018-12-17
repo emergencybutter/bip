@@ -37,7 +37,6 @@ static int cn_want_write(connection_t *cn);
 static int connection_timedout(connection_t *cn);
 static int socket_set_nonblock(int s);
 static void connection_connected(connection_t *c);
-static void real_write_all(connection_t *cn);
 static void real_read_all(connection_t *cn);
 static int read_socket_SSL(connection_t *cn);
 static int read_socket(connection_t *cn);
@@ -623,7 +622,7 @@ static int write_socket(connection_t *cn, char *line)
 		return _write_socket(cn, line);
 }
 
-static void real_write_all(connection_t *cn)
+void real_write_all(connection_t *cn)
 {
 	int ret;
 	char *line;
@@ -655,7 +654,7 @@ static void real_write_all(connection_t *cn)
 			/* interrupted or not ready */
 			assert(cn->partial == NULL);
 			cn->partial = line;
-			break;
+			return;
 		case WRITE_OK:
 			free(line);
 			break;
@@ -906,9 +905,6 @@ static void connection_save_endpoints(connection_t *c)
 
 static int connection_want_write(connection_t *cn)
 {
-	if (list_is_empty(cn->outgoing)) {
-		return 0;
-	}
 	if (cn->partial != NULL)
 		return bucket_contains(&cn->bucket, strlen(cn->partial));
 	if (!list_is_empty(cn->outgoing)) {
@@ -920,6 +916,7 @@ static int connection_want_write(connection_t *cn)
 
 void connection_tick(connection_t *connection) {
 	bucket_refill(&connection->bucket);
+	reset_trigger(connection);
 }
 
 void increment_pointee(void *data)
@@ -1068,8 +1065,8 @@ static void create_listening_socket(char *hostname, char *port, listener_t *cn)
 	mylog(LOG_ERROR, "Unable to bind/listen");
 }
 
-int default_items_per_sec = 70;
-int default_max_items = 70 * 3;
+int default_items_per_sec = 128;
+int default_max_items = 1024;
 
 static connection_t *connection_init(int timeout, int listen)
 {
