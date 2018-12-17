@@ -1151,6 +1151,8 @@ connection_t *accept_new(listener_t *listener)
 	socket_set_nonblock(handle);
 
 	conn = connection_init(listener->timeout, /*listen=*/1);
+	// Buckets to clients start full.
+	bucket_fill_up(&conn->bucket);
 	conn->connect_time = time(NULL);
 	conn->user_data = listener->user_data;
 	conn->handle = handle;

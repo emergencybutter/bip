@@ -38,6 +38,11 @@ void bucket_refill(bucket_t *bucket)
 	_bucket_refill_at_time(bucket, &now);
 }
 
+void bucket_fill_up(bucket_t *bucket)
+{
+	bucket->milli_items = bucket->max_items * 1000;
+}
+
 int bucket_contains(bucket_t *bucket, int items)
 {
 	assert(items > 0);

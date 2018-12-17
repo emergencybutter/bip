@@ -15,5 +15,6 @@ int bucket_try_remove(bucket_t *bucket, int items);
 int bucket_contains(bucket_t *bucket, int items);
 void bucket_add(bucket_t *bucket, int items);
 int bucket_items(bucket_t *bucket);
+void bucket_fill_up(bucket_t *bucket);
 
 #endif
