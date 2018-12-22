@@ -113,9 +113,9 @@ void poller_wait(poller_t *poller, int timeout)
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
 				tentative_num_fds *= 2;
-				fds = bip_realloc(
-					fds, sizeof(struct pollfd)
-						     * tentative_num_fds);
+				fds = bip_realloc(fds,
+						  sizeof(struct pollfd)
+							  * tentative_num_fds);
 			}
 			fds[num_fds - 1].fd = descriptor->fd;
 			fds[num_fds - 1].events = 0;

@@ -84,8 +84,12 @@ static void connecting_data_free(struct connecting_data *t)
 void connection_close(connection_t *cn)
 {
 	mylog(LOG_DEBUG, "Connection close asked. FD:%d (status: %d)",
-			(long)cn->handle, cn->connected);
+	      (long)cn->handle, cn->connected);
 	if (cn->connected != CONN_DISCONN && cn->connected != CONN_ERROR) {
+		// Try to flush all pending writes. They may contain error
+		// messages for the user.
+		bucket_fill_up(&cn->bucket);
+		real_write_all(cn);
 		cn->connected = CONN_DISCONN;
 		poller_unregister(global_poller(), cn->handle);
 		if (close(cn->handle) == -1)
@@ -101,8 +105,11 @@ void connection_free(connection_t *cn)
 
 	if (cn->outgoing) {
 		char *l;
-		while ((l = list_remove_first(cn->outgoing)))
+		while ((l = list_remove_first(cn->outgoing))) {
+			log(LOG_WARN,
+			    "Unflushed message on connection free: %s", l);
 			free(l);
+		}
 		list_free(cn->outgoing);
 	}
 	if (cn->incoming_lines) {
@@ -313,7 +320,8 @@ static void connection_client_on_out(void *data)
 		int err = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval,
 				     &optlen);
 		if (err < 0) {
-			log(LOG_ERROR, "Error in getsockopt: %s", strerror(errno));
+			log(LOG_ERROR, "Error in getsockopt: %s",
+			    strerror(errno));
 			connection_close(cn);
 			return;
 		}
@@ -639,6 +647,8 @@ void real_write_all(connection_t *cn)
 		line = list_remove_first(cn->outgoing);
 	}
 
+	log(LOG_ERROR, "trying to write: %s", line);
+
 	do {
 		ret = write_socket(cn, line);
 		switch (ret) {
@@ -910,7 +920,8 @@ static int connection_want_write(connection_t *cn)
 	return 0;
 }
 
-void connection_tick(connection_t *connection) {
+void connection_tick(connection_t *connection)
+{
 	connection_timedout(connection);
 	bucket_refill(&connection->bucket);
 	reset_trigger(connection);
@@ -1053,8 +1064,7 @@ static connection_t *connection_init(int timeout, int listen)
 	incoming = (char *)bip_malloc(CONN_BUFFER_SIZE);
 	outgoing = list_new(NULL);
 
-	bucket_init(&conn->bucket, default_items_per_sec,
-		    default_max_items);
+	bucket_init(&conn->bucket, default_items_per_sec, default_max_items);
 	conn->timeout = (listen ? 0 : timeout);
 	conn->connect_time = 0;
 	conn->incoming = incoming;
@@ -1379,7 +1389,8 @@ static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 				err = X509_V_ERR_CERT_REJECTED;
 				X509_STORE_CTX_set_error(ctx, err);
 
-				link_add_untrusted(c->user_data, X509_dup(err_cert));
+				link_add_untrusted(c->user_data,
+						   X509_dup(err_cert));
 			}
 			X509_OBJECT_free(xobj);
 		}
@@ -1419,9 +1430,8 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 	switch (conn->ssl_check_mode) {
 		struct stat st_buf;
 	case SSL_CHECK_BASIC:
-		if (!SSL_CTX_load_verify_locations(ssl_ctx,
-						   ssl_options->ssl_check_store,
-						   NULL)) {
+		if (!SSL_CTX_load_verify_locations(
+			    ssl_ctx, ssl_options->ssl_check_store, NULL)) {
 			mylog(LOG_ERROR,
 			      "Can't assign check store to "
 			      "SSL connection! Proceeding without!");
@@ -1502,8 +1512,7 @@ static connection_t *_connection_new_SSL(char *dsthostname, char *dstport,
 			    ssl_ctx, ssl_options->ssl_client_certfile))
 			mylog(LOG_WARN, "SSL: Unable to load certificate file");
 		else if (!SSL_CTX_use_PrivateKey_file(
-				 ssl_ctx,
-				 ssl_options->ssl_client_certfile,
+				 ssl_ctx, ssl_options->ssl_client_certfile,
 				 SSL_FILETYPE_PEM))
 			mylog(LOG_WARN, "SSL: Unable to load key file");
 		else

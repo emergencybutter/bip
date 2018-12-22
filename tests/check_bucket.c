@@ -28,8 +28,8 @@ START_TEST(test_bucket)
 	_bucket_refill_at_time(&bucket, &fake_now);
 	ck_assert_int_eq(bucket_items(&bucket), 4 * 2);
 	ck_assert(bucket_try_remove(&bucket, 1));
-	ck_assert_int_eq(bucket_items(&bucket), 4*2-1);
-	ck_assert(bucket_try_remove(&bucket, 4*2-1));
+	ck_assert_int_eq(bucket_items(&bucket), 4 * 2 - 1);
+	ck_assert(bucket_try_remove(&bucket, 4 * 2 - 1));
 	ck_assert_int_eq(bucket_items(&bucket), 0);
 	ck_assert(!bucket_try_remove(&bucket, 1));
 	fake_now.tv_sec += 10 * 2 + 1000;

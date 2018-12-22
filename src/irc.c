@@ -1106,15 +1106,15 @@ static int irc_cli_part(struct link_client *irc, struct line *line)
 #ifdef HAVE_LIBSSL
 static int irc_dispatch_trust_client(struct link_client *ic, struct line *line)
 {
-	int r = OK_COPY;
+	log(LOG_DEBUG, "irc_dispatch_trust_client");
 	if (!irc_line_includes(line, 1))
 		return ERR_PROTOCOL;
 
 	if (strcasecmp(irc_line_elem(line, 0), "BIP") == 0
 	    && strcasecmp(irc_line_elem(line, 1), "TRUST") == 0)
-		r = adm_trust(ic, line);
+		return adm_trust(ic, line);
 
-	return r;
+	return OK_COPY;
 }
 #endif
 
@@ -1281,7 +1281,7 @@ int irc_dispatch(bip_t *bip, struct link_any *l, struct line *line)
 		break;
 #endif
 	default:
-		fatal("gnéééééé");
+		fatal("dispatch");
 	}
 	return ERR_PROTOCOL; /* never reached */
 }

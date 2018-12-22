@@ -90,14 +90,16 @@ void irc_test_server_process(irc_test_server_t *server)
 		if (client_state->connection->connected == CONN_INPROGRESS) {
 			log(LOG_ERROR, "fd: %d, still connecting",
 			    client_state->connection->handle);
-			return;
+			continue;
 		}
 		if (client_state->connection->connected == CONN_SSL_CONNECT) {
 			log(LOG_ERROR, "fd: %d, still establishing ssl things",
 			    client_state->connection->handle);
-			return;
+			continue;
 		}
-		ck_assert(cn_is_connected(client_state->connection));
+		if (!cn_is_connected(client_state->connection)) {
+			continue;
+		}
 		char *line =
 			irc_test_server_client_state_current_line(client_state);
 		if (line == NULL) {
@@ -191,11 +193,6 @@ void irc_test_client_process(irc_test_client_t *client)
 		log(LOG_DEBUG, "TEST CLIENT SENT: %s", line + 2);
 		client->proxy_replay_line++;
 	} else if (line[0] == 'R') {
-		descriptor_t *d = poller_get_descriptor(
-			global_poller(), client->connection->handle);
-		char *dbg = descriptor_dbg_string(d);
-		log(LOG_DEBUG, "%s", dbg);
-		free(dbg);
 		if (!list_is_empty(client->connection->incoming_lines)) {
 			char *actual_line = list_remove_first(
 				client->connection->incoming_lines);
@@ -207,7 +204,7 @@ void irc_test_client_process(irc_test_client_t *client)
 	}
 }
 
-void set_up_bip(bip_t *bip, int server_ssl, int client_ssl)
+struct link *set_up_bip(bip_t *bip, int server_ssl, int client_ssl)
 {
 	struct network *n;
 	n = bip_calloc(sizeof(struct network), 1);
@@ -225,6 +222,8 @@ void set_up_bip(bip_t *bip, int server_ssl, int client_ssl)
 	u->default_nick = strdup("nick0");
 	u->default_username = strdup("username0");
 	u->default_realname = strdup("realname0");
+	char *tmp = strdup("/tmp/check_irc_XXXXXX");
+	u->ssl_check_store = mktemp(tmp);
 	// tata
 	hash_binary("10dda7edef3b7b946f659673e4e84e816a1fbc7e", &u->password,
 		    &u->seed);
@@ -240,6 +239,8 @@ void set_up_bip(bip_t *bip, int server_ssl, int client_ssl)
 	l->user = u;
 	l->log = log_new(u, "log0");
 	l->network = n;
+	assert(l->untrusted_certs != NULL);
+	return l;
 }
 
 void test_proxy_connects_opts(int server_ssl)
@@ -442,6 +443,121 @@ START_TEST(test_proxy_and_client_connects_ssl)
 }
 END_TEST
 
+START_TEST(test_adm_trust)
+{
+	bip_t bip;
+	bip_init(&bip);
+	bip.listener = listener_new("127.0.0.1", 7777, NULL);
+
+	irc_test_server_t server;
+	irc_test_server_init(&server, /*server_ssl=*/1);
+	server.num_expected_clients = 1;
+
+	array_push(&server.client_replay_lines,
+		   "R:USER username0 0 * realname0");
+	array_push(&server.client_replay_lines, "R:NICK nick0");
+	array_push(&server.client_replay_lines,
+		   "S::servername 001 nick0 :Welcome nick0\r\n");
+	array_push(&server.client_replay_lines,
+		   "S::servername 376 nick0 :End of /MOTD command.\r\n");
+
+	struct link *l = set_up_bip(&bip, /*server_ssl=*/1, /*client_ssl=*/0);
+	l->ssl_check_mode = SSL_CHECK_BASIC;
+	ck_assert_int_eq(0, list_count(&bip.conn_list));
+	bip_tick(&bip);
+	ck_assert_int_eq(1, list_count(&bip.conn_list));
+	while (array_count(&server.clients) != 1) {
+		irc_test_server_process(&server);
+		irc_one_shot(&bip, 10);
+	}
+	log(LOG_INFO, "proxy connected to server");
+	// Find the server link.
+	ck_assert_int_eq(1, list_count(&bip.link_list));
+
+	struct link *link = list_get_first(&bip.link_list);
+	ck_assert(link != NULL);
+	ck_assert(link->l_server != NULL);
+	ck_assert_int_eq(link->s_state, IRCS_NONE);
+	connection_t *bip_to_server = CONN(link->l_server);
+	// Wait for a connection failure.
+	while (sk_X509_num(link->untrusted_certs) == 0) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		log(LOG_INFO, "Untrusted certs: %d",
+		    sk_X509_num(link->untrusted_certs));
+	}
+
+	// TODO Reproduce a bug where disconnecting clients while waiting for
+	// adm trust cause segv.
+	irc_test_client_t client;
+	irc_test_client_init(&client, /*client_ssl=*/0);
+	log(LOG_INFO, "Client: fd: %d", client.connection->handle);
+
+	array_push(&client.proxy_replay_lines,
+		   "S:USER username0 0 * realname0\r\n");
+	array_push(&client.proxy_replay_lines, "S:NICK nick0\r\n");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE nick0 :You should type /QUOTE PASS "
+		   "your_username:your_password:your_connection_name");
+	array_push(&client.proxy_replay_lines,
+		   "S:PASS user0:tata:connection0\r\n");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :This server SSL certificate was "
+		   "not accepted because it is not in your store of trusted "
+		   "certificates:");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :Subject: /C=US/O=Sexy "
+		   "boys/OU=Bip/CN=Bip");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :Issuer:  /C=US/O=Sexy "
+		   "boys/OU=Bip/CN=Bip");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :MD5 fingerprint: "
+		   "C7:BB:C7:85:51:3A:B9:74:41:28:EF:82:1B:FA:5C:6A");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :WARNING: if you've already "
+		   "trusted a certificate for this server before, that "
+		   "probably means it has changed.");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :If so, YOU MAY BE SUBJECT OF A "
+		   "MAN-IN-THE-MIDDLE ATTACK! PLEASE DON'T TRUST THIS "
+		   "CERTIFICATE IF YOU'RE NOT SURE THIS IS NOT THE CASE.");
+	array_push(&client.proxy_replay_lines,
+		   "R::b.i.p NOTICE TrustEm :Type /QUOTE BIP TRUST OK to trust "
+		   "this certificate, /QUOTE BIP TRUST NO to discard it.");
+	array_push(&client.proxy_replay_lines, "S:BIP TRUST OK\r\n");
+	array_push(&client.proxy_replay_lines,
+		   "R::irc.bip.net NOTICE pouet :If the certificate is "
+		   "trusted, bip should be able to connect to the server on "
+		   "the next retry. Please wait a while and try connecting "
+		   "your client again.");
+
+	while (list_count(&bip.connecting_client_list) != 1) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+	}
+	ck_assert_int_eq(1, list_count(&bip.connecting_client_list));
+	struct link_client *ic = list_get_first(&bip.connecting_client_list);
+	connection_t *proxy_connecting_client_conn = CONN(ic);
+
+	while (TYPE(ic) != IRC_TYPE_TRUST_CLIENT) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+		log(LOG_INFO, "Waiting for IRC_TYPE_TRUST_CLIENT");
+	}
+	while (client.proxy_replay_line < 13) {
+		irc_one_shot(&bip, 10);
+		irc_test_server_process(&server);
+		irc_test_client_process(&client);
+		log(LOG_INFO, "Proxy client replaying: %d",
+		    client.proxy_replay_line);
+	}
+	ck_assert_int_eq(TYPE(ic), IRC_TYPE_TRUST_CLIENT);
+}
+END_TEST
+
 #if 0
 // to run with CK_DEFAULT_TIMEOUT=10000
 START_TEST(test_the_test) {
@@ -480,6 +596,7 @@ Suite *money_suite(void)
 #ifdef HAVE_LIBSSL
 	tcase_add_test(tc_core, test_proxy_connects_ssl);
 	tcase_add_test(tc_core, test_proxy_and_client_connects_ssl);
+	tcase_add_test(tc_core, test_adm_trust);
 #endif
 	suite_add_tcase(s, tc_core);
 
