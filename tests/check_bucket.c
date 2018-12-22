@@ -14,6 +14,8 @@ START_TEST(test_bucket)
 	struct timespec fake_now = bucket.last_bucket_refill_ts;
 	ck_assert_int_eq(bip_duration_ms(&fake_now, &origin), 0);
 
+	ck_assert_int_eq(bucket_items(&bucket), 10);
+	ck_assert(bucket_try_remove(&bucket, 8));
 	ck_assert_int_eq(bucket_items(&bucket), 2);
 
 	ck_assert(bucket_try_remove(&bucket, 2));
