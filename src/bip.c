@@ -386,7 +386,6 @@ void adm_bip_addconn(bip_t *bip, struct link_client *ic, const char *conn_name,
 	l->log = log_new(user, conn_name);
 #ifdef HAVE_LIBSSL
 	l->ssl_check_mode = user->ssl_check_mode;
-	l->untrusted_certs = sk_X509_new_null();
 #endif
 
 
@@ -431,7 +430,6 @@ static int add_connection(bip_t *bip, struct bipuser *user, list_t *data)
 		l->log = log_new(user, name);
 #ifdef HAVE_LIBSSL
 		l->ssl_check_mode = user->ssl_check_mode;
-		l->untrusted_certs = sk_X509_new_null();
 #endif
 	} else {
 		l->network = NULL;
@@ -1478,7 +1476,6 @@ int link_add_untrusted(struct link_server *ls, X509 *cert)
 				sk_X509_value(LINK(ls)->untrusted_certs, i)))
 			return 1;
 	}
-
 	return sk_X509_push(LINK(ls)->untrusted_certs, cert);
 }
 

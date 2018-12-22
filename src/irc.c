@@ -2650,6 +2650,9 @@ struct link *irc_link_new()
 	list_init(&link->on_connect_send, list_ptr_cmp);
 	link->autojoin_on_kick = 1;
 	link->ignore_server_capab = 1;
+#ifdef HAVE_LIBSSL
+	link->untrusted_certs = sk_X509_new_null();
+#endif
 	return link;
 }
 

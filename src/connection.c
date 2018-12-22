@@ -1379,8 +1379,7 @@ static int bip_ssl_verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
 				err = X509_V_ERR_CERT_REJECTED;
 				X509_STORE_CTX_set_error(ctx, err);
 
-				link_add_untrusted(c->user_data,
-						   X509_dup(err_cert));
+				link_add_untrusted(c->user_data, X509_dup(err_cert));
 			}
 			X509_OBJECT_free(xobj);
 		}
