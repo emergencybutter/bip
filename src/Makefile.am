@@ -22,6 +22,7 @@ libbip_a_SOURCES = \
 	util.c util.h
 
 libbip_a_CFLAGS = $(OPENSSL_CFLAGS) $(AM_CFLAGS)
+libbip_a_LIBADD = libbiplex.a
 
 bin_PROGRAMS = bip bipmkpw
 
