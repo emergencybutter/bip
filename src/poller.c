@@ -113,7 +113,7 @@ void poller_wait(poller_t *poller, int timeout)
 			num_fds++;
 			if (num_fds > tentative_num_fds) {
 				tentative_num_fds *= 2;
-				struct pollfd *fds = bip_realloc(
+				fds = bip_realloc(
 					fds, sizeof(struct pollfd)
 						     * tentative_num_fds);
 			}
@@ -134,8 +134,6 @@ void poller_wait(poller_t *poller, int timeout)
 	if (poll_ret < 0) {
 		fatal("poll: %s", strerror(errno));
 	}
-	int *removed_fds = bip_malloc(sizeof(int) * num_fds);
-	int num_removed_fds = 0;
 	for (int i = 0; i < num_fds; i++) {
 		descriptor_t *descriptor =
 			poller_get_descriptor(poller, fds[i].fd);

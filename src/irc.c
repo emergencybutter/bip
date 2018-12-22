@@ -2474,10 +2474,8 @@ void bip_tick(bip_t *bip)
 
 void bip_on_listener_event(bip_t *bip, listener_t *listener)
 {
-	struct link_any *lc = (struct link_any *)listener->user_data;
-
 	struct link_client *n;
-	while ((n = irc_accept_new(bip->listener))) {
+	while ((n = irc_accept_new(listener))) {
 		list_add_last(&bip->conn_list, CONN(n));
 		list_add_last(&bip->connecting_client_list, n);
 	}

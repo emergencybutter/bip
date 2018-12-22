@@ -20,7 +20,6 @@
 #include "poller.h"
 
 #ifdef HAVE_LIBSSL
-static int ssl_initialized = 0;
 static int ssl_cx_idx;
 extern FILE *conf_global_log_file;
 static BIO *errbio = NULL;
@@ -28,15 +27,12 @@ extern char *conf_ssl_certfile;
 extern char *conf_biphome;
 extern char *conf_client_ciphers;
 extern char *conf_client_dh_file;
-static SSL_CTX *SSL_init_context(char *ciphers);
 /* SSH like trust management */
 int link_add_untrusted(void *ls, X509 *cert);
 #endif
 
-static int cn_want_write(connection_t *cn);
-static int connection_timedout(connection_t *cn);
+static void connection_timedout(connection_t *cn);
 static int socket_set_nonblock(int s);
-static void connection_connected(connection_t *c);
 static void real_read_all(connection_t *cn);
 static int read_socket_SSL(connection_t *cn);
 static int read_socket(connection_t *cn);
@@ -151,8 +147,6 @@ static void connection_sslize(connection_t *cn)
 	log(LOG_DEBUG, "fd: %d, connection_sslize %d", cn->handle,
 	    cn->ssl_client);
 
-	descriptor_t *descriptor =
-		poller_get_descriptor(global_poller(), cn->handle);
 	int err;
 	if (cn->ssl_client) {
 		err = SSL_connect(cn->ssl_h);
@@ -286,13 +280,12 @@ static void connection_client_on_in(void *data)
 
 void real_read_all(connection_t *cn)
 {
-	int ret;
 #ifdef HAVE_LIBSSL
 	if (cn->ssl_h)
-		ret = read_socket_SSL(cn);
+		read_socket_SSL(cn);
 	else
 #endif
-		ret = read_socket(cn);
+		read_socket(cn);
 	if (!cn_is_connected(cn)) {
 		return;
 	}
@@ -319,7 +312,13 @@ static void connection_client_on_out(void *data)
 		socklen_t optlen = sizeof(optval);
 		int err = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval,
 				     &optlen);
+		if (err < 0) {
+			log(LOG_ERROR, "Error in getsockopt: %s", strerror(errno));
+			connection_close(cn);
+			return;
+		}
 		if (optval != 0) {
+			log(LOG_ERROR, "Failed to connect");
 			connection_close(cn);
 			return;
 		}
@@ -684,7 +683,6 @@ static void reset_trigger(connection_t *cn)
  */
 void write_line_fast(connection_t *cn, char *line)
 {
-	int r;
 	char *nline = bip_strdup(line);
 	list_add_first(cn->outgoing, nline);
 	reset_trigger(cn);
@@ -913,6 +911,7 @@ static int connection_want_write(connection_t *cn)
 }
 
 void connection_tick(connection_t *connection) {
+	connection_timedout(connection);
 	bucket_refill(&connection->bucket);
 	reset_trigger(connection);
 }
@@ -921,28 +920,6 @@ void increment_pointee(void *data)
 {
 	int *p = data;
 	(*p)++;
-}
-
-void wait_event(list_t *listeners_list, list_t *cn_list, int *msec)
-{
-	int timedout = 0;
-	global_poller()->timeout = *msec;
-	global_poller()->timed_out = &increment_pointee;
-	global_poller()->data = &timedout;
-
-	struct timespec before;
-	bip_gettime(&before);
-	poller_wait(global_poller(), *msec);
-	struct timespec after;
-	bip_gettime(&after);
-	if (timedout) {
-		*msec = 0;
-	} else {
-		*msec -= (after.tv_sec - before.tv_sec) * 1000
-			 + (after.tv_nsec - before.tv_nsec) / 1000000;
-		if (*msec < 0)
-			*msec = 0;
-	}
 }
 
 static void create_socket(char *dsthostname, char *dstport, char *srchostname,
@@ -1590,23 +1567,20 @@ int cn_is_listening(connection_t *cn)
 }
 
 /* returns 1 if connection must be notified */
-static int connection_timedout(connection_t *cn)
+static void connection_timedout(connection_t *cn)
 {
 	if (cn_is_connected(cn) || !cn->timeout)
-		return 0;
+		return;
 
 	if (!cn->connecting_data)
-		fatal("connection_timedout called with no connecting_data!\n");
+		return;
 
 	if (time(NULL) - cn->connect_time > cn->timeout) {
 		/* connect() completion timed out */
 		close(cn->handle);
 		cn->handle = -1;
 		connect_trynext(cn);
-		if (!cn_is_new(cn))
-			return 1;
 	}
-	return 0;
 }
 
 static int socket_set_nonblock(int s)
