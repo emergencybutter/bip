@@ -18,3 +18,4 @@ MaxEmptyLinesToKeep: 2
 BreakBeforeBinaryOperators: NonAssignment
 SortIncludes:    false
 ContinuationIndentWidth: 8
+ColumnLimit: 80
