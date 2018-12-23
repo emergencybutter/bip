@@ -261,6 +261,46 @@ static void listener_on_hup(void *data)
 	log(LOG_DEBUG, "fd: %d, on_hup", listener->handle);
 }
 
+static void connection_inprogress(connection_t *cn)
+{
+	int optval = -1;
+	socklen_t optlen = sizeof(optval);
+	int err =
+		getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval, &optlen);
+	if (err < 0) {
+		log(LOG_ERROR, "Error in getsockopt: %s", strerror(errno));
+		connection_close(cn);
+		return;
+	}
+	if (optval != 0) {
+		log(LOG_ERROR, "Failed to connect");
+		connection_close(cn);
+		return;
+	}
+	if (cn->connecting_data) {
+		connecting_data_free(cn->connecting_data);
+		cn->connecting_data = NULL;
+	}
+	log(LOG_DEBUG, "fd: %d, Socket connected (TCP)", cn->handle);
+	connection_save_endpoints(cn);
+#ifdef HAVE_LIBSSL
+	if (cn->ssl_h) {
+		cn->connected = CONN_SSL_CONNECT;
+		cn->need_write = 1;
+		if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
+			mylog(LOG_ERROR,
+			      "unable to associate FD to SSL "
+			      "structure");
+			connection_close(cn);
+			cn->connected = CONN_ERROR;
+			return;
+		}
+		return;
+	}
+#endif
+	cn->connected = CONN_OK;
+}
+
 static void connection_client_on_in(void *data)
 {
 	connection_t *cn = data;
@@ -279,6 +319,7 @@ static void connection_client_on_in(void *data)
 		    list_count(cn->incoming_lines));
 		break;
 	case CONN_INPROGRESS:
+		connection_inprogress(cn);
 		break;
 	default:
 		fatal("Unknown connect state: %d", cn->connected);
@@ -315,43 +356,7 @@ static void connection_client_on_out(void *data)
 	}
 	switch (cn->connected) {
 	case CONN_INPROGRESS: {
-		int optval = -1;
-		socklen_t optlen = sizeof(optval);
-		int err = getsockopt(cn->handle, SOL_SOCKET, SO_ERROR, &optval,
-				     &optlen);
-		if (err < 0) {
-			log(LOG_ERROR, "Error in getsockopt: %s",
-			    strerror(errno));
-			connection_close(cn);
-			return;
-		}
-		if (optval != 0) {
-			log(LOG_ERROR, "Failed to connect");
-			connection_close(cn);
-			return;
-		}
-		if (cn->connecting_data) {
-			connecting_data_free(cn->connecting_data);
-			cn->connecting_data = NULL;
-		}
-		log(LOG_DEBUG, "fd: %d, Socket connected (TCP)", cn->handle);
-		connection_save_endpoints(cn);
-#ifdef HAVE_LIBSSL
-		if (cn->ssl_h) {
-			cn->connected = CONN_SSL_CONNECT;
-			cn->need_write = 1;
-			if (!SSL_set_fd(cn->ssl_h, cn->handle)) {
-				mylog(LOG_ERROR,
-				      "unable to associate FD to SSL "
-				      "structure");
-				connection_close(cn);
-				cn->connected = CONN_ERROR;
-				return;
-			}
-			break;
-		}
-#endif
-		cn->connected = CONN_OK;
+		connection_inprogress(cn);
 		break;
 	}
 	case CONN_OK:
