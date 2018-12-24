@@ -796,7 +796,6 @@ static int irc_cli_startup(bip_t *bip, struct link_client *ic,
 				":ERROR Proxy not yet connected, try again "
 				"later\r\n");
 		real_write_all(CONN(ic));
-		unbind_from_link(ic);
 		free(init_nick);
 		return OK_CLOSE;
 	}
@@ -2051,6 +2050,9 @@ void irc_client_close(struct link_client *ic)
 					    LINK(ic)->no_client_away_msg);
 			log_client_none_connected(LINK(ic)->log);
 		}
+		irc_client_free(ic);
+	} else if (TYPE(ic) == IRC_TYPE_TRUST_CLIENT) {
+		unbind_from_link(ic);
 		irc_client_free(ic);
 	} else if (TYPE(ic) == IRC_TYPE_LOGING_CLIENT) {
 		irc_client_free(ic);
