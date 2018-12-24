@@ -183,7 +183,6 @@ static void connection_sslize(connection_t *cn)
 		connection_close(cn);
 		break;
 	case SSL_ERROR_NONE: {
-		log(LOG_DEBUG, "none");
 		const SSL_CIPHER *cipher;
 		char buf[128];
 		int len;
@@ -317,6 +316,11 @@ static void connection_client_on_in(void *data)
 		real_read_all(cn);
 		log(LOG_DEBUG, "fd: %d, num lines after read: %d", cn->handle,
 		    list_count(cn->incoming_lines));
+		list_iterator_t lit;
+		char *l;
+		for (list_it_init(cn->incoming_lines, &lit); (l = list_it_item(&lit)); list_it_next(&lit)) {
+			log(LOG_DEBUG, "l: %s", l);
+		}
 		break;
 	case CONN_INPROGRESS:
 		connection_inprogress(cn);
@@ -652,22 +656,25 @@ void real_write_all(connection_t *cn)
 		line = list_remove_first(cn->outgoing);
 	}
 
-	log(LOG_ERROR, "trying to write: %s", line);
-
 	do {
+		log(LOG_DEBUG, "Trying write: %s", line);
 		ret = write_socket(cn, line);
 		switch (ret) {
 		case WRITE_ERROR:
 			/* we might as well free(line) here */
 			list_add_first(cn->outgoing, line);
 			connection_close(cn);
+						log(LOG_DEBUG, "error");
 			return;
 		case WRITE_KEEP:
+			log(LOG_DEBUG, "keep");
 			/* interrupted or not ready */
 			assert(cn->partial == NULL);
 			cn->partial = line;
 			return;
 		case WRITE_OK:
+								log(LOG_DEBUG, "ok");
+
 			free(line);
 			break;
 		default:

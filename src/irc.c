@@ -584,6 +584,7 @@ static void bind_to_link(struct link *l, struct link_client *ic)
 	l->l_clientv = bip_realloc(l->l_clientv,
 				   l->l_clientc * sizeof(struct link_client *));
 	l->l_clientv[i] = ic;
+	log(LOG_DEBUG, "%p is %d", ic, i);
 }
 
 void unbind_from_link(struct link_client *ic)
@@ -591,6 +592,7 @@ void unbind_from_link(struct link_client *ic)
 	struct link *l = LINK(ic);
 	int i;
 
+	log(LOG_DEBUG, "seeking %p", ic);
 	for (i = 0; i < l->l_clientc; i++)
 		if (l->l_clientv[i] == ic)
 			break;

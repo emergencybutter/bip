@@ -37,6 +37,7 @@ static int socket_set_nonblock(int s)
 
 descriptor_t *poller_register(poller_t *p, int fd)
 {
+	log(LOG_DEBUG, "Register FD:%d ", fd);
 	INT_KEY(str, fd);
 	assert(hash_get(&p->fds, str) == NULL);
 	descriptor_t *descriptor = bip_malloc(sizeof(descriptor_t));
