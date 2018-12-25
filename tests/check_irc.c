@@ -488,12 +488,6 @@ START_TEST(test_adm_trust)
 		&client, &bip,
 		":irc.bip.net NOTICE pouet :==== Certificate now trusted.");
 
-	ck_assert_int_eq(1, list_count(&bip.connecting_client_list));
-	struct link_client *ic = list_get_first(&bip.connecting_client_list);
-	connection_t *proxy_connecting_client_conn = CONN(ic);
-
-	ck_assert_int_eq(TYPE(ic), IRC_TYPE_TRUST_CLIENT);
-
 	irc_test_client_close(&client);
 	irc_test_client_clean(&client);
 
@@ -716,12 +710,12 @@ Suite *money_suite(void)
 	s = suite_create("bip");
 	tc_core = tcase_create("irc");
 
-	// tcase_add_test(tc_core, test_proxy_connects);
-	// tcase_add_test(tc_core, test_proxy_and_client_connects);
+	tcase_add_test(tc_core, test_proxy_connects);
+	tcase_add_test(tc_core, test_proxy_and_client_connects);
 #ifdef HAVE_LIBSSL
-	// tcase_add_test(tc_core, test_proxy_connects_ssl);
-	// tcase_add_test(tc_core, test_proxy_and_client_connects_ssl);
-	//tcase_add_test(tc_core, test_adm_trust);
+	tcase_add_test(tc_core, test_proxy_connects_ssl);
+	tcase_add_test(tc_core, test_proxy_and_client_connects_ssl);
+	tcase_add_test(tc_core, test_adm_trust);
 	tcase_add_test(tc_core, test_adm_trust_disconnect);
 #endif
 	suite_add_tcase(s, tc_core);
